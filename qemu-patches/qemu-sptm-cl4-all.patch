@@ -53,7 +53,7 @@ index 35c4460..b1ae9c5 100644
      // CTXR region C: [TXM-rx, TXM-bx]
      APPLE_STATE(env)->acc_ctxr_c_lwr_el2 = REGION_START("TXM-rx");
 diff --git a/hw/arm/darwin.c b/hw/arm/darwin.c
-index 51d240b..48121c6 100644
+index 51d240b..9f5bbca 100644
 --- a/hw/arm/darwin.c
 +++ b/hw/arm/darwin.c
 @@ -21,6 +21,15 @@
@@ -179,7 +179,7 @@ index 51d240b..48121c6 100644
 +static void darwin_kbd_event(DeviceState *dev, QemuConsole *src, QemuInputEvent *evt)
 +{
 +    if (evt->type != INPUT_EVENT_KIND_KEY) return;
-+    int q = evt->key.key;          /* already a QKeyCode */
++    int q = qemu_input_linux_to_qcode(evt->key.key);  /* evt->key.key is a Linux keycode */
 +    bool down = evt->key.down;
 +    if (q == Q_KEY_CODE_SHIFT || q == Q_KEY_CODE_SHIFT_R) { g_kbd_shift = down; return; }
 +    if (q == Q_KEY_CODE_CTRL || q == Q_KEY_CODE_CTRL_R)   { g_kbd_ctrl  = down; return; }

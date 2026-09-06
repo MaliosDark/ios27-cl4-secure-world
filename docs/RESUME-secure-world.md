@@ -826,3 +826,12 @@ interactive ROOT shell on the iPhone panel with NO full rootfs needed. Caveats: 
 lines; and QMP send-key must use valid lowercase qcodes (uppercase names are invalid --
 a test artifact, not the wiring). On a real keyboard in the QEMU window (ver_pantalla.sh)
 input is one key at a time. shots/panel-root-shell.png shows bash-5.3# on the panel.
+
+## UPDATE 25 — keyboard mapping fixed; shell input verified
+Bug: darwin_kbd_event treated evt->key.key as a QKeyCode, but it is a LINUX keycode
+(ui/input.c: evt.key.key = qemu_input_key_value_to_linux(...)). Fixed with
+qemu_input_linux_to_qcode(evt->key.key) before the QKeyCode switch. Now typed chars reach
+bash correctly (verified "uname"/"ls" arriving at bash-5.3#). Two bash-5.3# prompts +
+typed "ls" visible on the panel (shots/panel-shell-typing.png). Interactive root shell on
+the iPhone panel is live and usable; only cosmetic issue is launchd sharing /dev/console.
+So: ver_pantalla.sh now gives a lit iPhone panel + a working keyboard into a root bash.

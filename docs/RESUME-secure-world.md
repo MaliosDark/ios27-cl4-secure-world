@@ -447,3 +447,32 @@ Pursuing A, B, C in parallel. B (reverse SPTM's SK bootstrap) progress:
   properties drive the SK handoff.
 Paths A (CL4 init chain) and C (emulate SecureRTBuddyDCP) are being analyzed in parallel;
 findings to be merged here.
+
+## UPDATE 10 — Path C findings (emulate/bypass SecureRTBuddyDCP)
+"SecureRTBuddyDCP" is NOT a kernelcache constant — it comes from the device tree
+(iop-dcp-nub `routes` -> exclave-service = com.apple.service.SecureRTBuddyDCP).
+Gate: com.apple.driver.RTBuddy RTBuddy::start() route loop (VA 0xfffffff00a7c5180..
+..527c): builds a name-matching dict for com.apple.service.SecureRTBuddyDCP and calls
+IOService::waitForMatchingService(dict, timeout=UINT64_MAX) at 0xfffffff00a7c5278;
+DCP never returns -> later panic "Unabled to attach route: %p" RTBuddy.cpp:3363 (route
+null). Real publisher = SecureRTBuddyProxy (fileset 0xfffffff007d21d90), which
+registerService()s ONLY after a live Tightbeam IPC handshake over an exclave comms
+endpoint (strings: RTBuddy_tightbeam.c, mExclaveCommsEndpoint, "Missing exclave-endpoint
+property", rtbuddyservice_powerstate__decode, shareddartmapperservice). A bare
+IORegistry publish is EMPIRICALLY INSUFFICIENT (Parts 24/26/36/37): RTBuddy/AppleDCP
+dereference the route object downstream as a real transport.
+Two options:
+  (a) emulate the exclave comms + Tightbeam rtbuddyservice protocol as a QEMU device so
+      the REAL in-kernel proxy completes and registers (much undocumented plumbing);
+  (b) KERNEL-PATCH SecureRTBuddyProxy::start() to registerService() immediately with its
+      route adaptor redirected to the NORMAL-world DCP ASC mailbox (0x412E00000), patch
+      AppleDCP null/secure-route derefs, then drive DCP over the emulated mailbox.
+apple_rtkit.c/apple_dcp.c status: ASC mailbox MMIO + RTKit mgmt ep0 handshake + AFK ring
+handshake (eps 0x23/0x24/0x25) DONE, but built for a NORMAL ASC-mailbox DCP; missing:
+AFK ring memory mapping at bfr_dva, IOMFB/EPIC RPC (mode set / surface register / swap),
+framebuffer scanout to DarwinFB, and any SecureRTBuddyDCP publish. Wiring at
+darwin.c:938 (apple_rtkit_new "dcp" @0x412E00000) + apple_dcp.c:148 apple_dcp_attach.
+Bottom line: approach (b) is the SHORTER/lower-risk route to pixels than booting CL4 +
+the 164MB Ap,ExclaveOS userspace; step "finish apple_dcp IOMFB/EPIC + scanout" is the
+dominant cost and is common to BOTH the CL4 and the bypass routes -> it is worth building
+regardless of which gate we solve.

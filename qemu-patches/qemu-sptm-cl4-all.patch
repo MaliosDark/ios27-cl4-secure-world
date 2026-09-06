@@ -1518,6 +1518,26 @@ index b96d421..24f9541 100644
  #ifdef DEBUG_MEMORY_LAYOUT
      uint64_t sptm_load = args.virtBase - args.physBase + sptm_mi.physlo;
      uint64_t txm_load = sptm_load + 1 * SPTM_EXPECTED_STRIDE;
+diff --git a/hw/char/exynos4210_uart.c b/hw/char/exynos4210_uart.c
+index 46fc4e3..06c000a 100644
+--- a/hw/char/exynos4210_uart.c
++++ b/hw/char/exynos4210_uart.c
+@@ -20,6 +20,7 @@
+  */
+ 
+ #include "qemu/osdep.h"
++extern void dcp_console_feed(const uint8_t *buf, int len);
+ #include "hw/core/sysbus.h"
+ #include "migration/vmstate.h"
+ #include "qapi/error.h"
+@@ -435,6 +436,7 @@ static void exynos4210_uart_write(void *opaque, hwaddr offset,
+             /* XXX this blocks entire thread. Rewrite to use
+              * qemu_chr_fe_write and background I/O callbacks */
+             qemu_chr_fe_write_all(&s->chr, &ch, 1);
++            dcp_console_feed(&ch, 1);   /* tee guest console to the DCP panel */
+             trace_exynos_uart_tx(s->channel, ch);
+             s->reg[I_(UTRSTAT)] |= UTRSTAT_TRANSMITTER_EMPTY |
+                     UTRSTAT_Tx_BUFFER_EMPTY;
 diff --git a/include/xnu/boot/xnuboot.h b/include/xnu/boot/xnuboot.h
 index 2c4c01e..b689d6c 100644
 --- a/include/xnu/boot/xnuboot.h

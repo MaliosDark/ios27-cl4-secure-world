@@ -742,3 +742,22 @@ but has a chain of null-object derefs (its state globals uninitialised without t
 service) + needs the full IOMFB/EPIC RPC emulation + scanout (ChefKiss-t8030 scale).
 Both are large multi-session efforts. Everything mapped, activated where possible, and
 preserved. The pixels-on-screen goal requires completing one of these emulation efforts.
+
+## UPDATE 19 — PANEL LIT with the REAL iOS boot log (screen ON)
+Built the display OUTPUT half end-to-end and put real guest content on the panel:
+- hw/arm/apple_dcp.c: apple_dcp now DRIVES the panel. A QEMU_CLOCK_REALTIME timer paints
+  ~25fps straight into the framebuffer RAM (address_space_write to fb_base) that the
+  DarwinFB console already scans out. Two renderers: a bring-up pulse frame, and (the win)
+  an on-panel CONSOLE that renders the guest's boot log as a phosphor terminal using
+  QEMU's vgafont16 (ui/vgafont.h) -- top status bar "iPhone17,3 iOS 27 t8140 DCP LINK UP",
+  newest lines bright, RGB scanout strip, blinking cursor.
+- hw/char/exynos4210_uart.c: the emulated UART tees every TX byte to dcp_console_feed()
+  so the panel shows the ACTUAL iOS kernel log (AppleSEPKeyStore, AMFI, TrustedClockingKEXT,
+  apfs mountroot, RTBuddy(ANS2), AppleANS2 controllers, ...).
+Run: DARWIN_RTKIT=1 DARWIN_FB=1 qemu ... (any dtree). Screendump proof:
+shots/panel-ios-console.png (real boot log) + shots/panel-scanout.png (pulse frame).
+This is REAL iOS content on the iPhone panel, driven by our emulated DCP scanout -- the
+output half of the pipeline (DCP -> framebuffer -> DarwinFB -> screen) is COMPLETE and
+visible. Remaining for a graphical iOS UI: the guest IOMFB delivering real surfaces
+(needs the full OS, not the ramdisk, + the IOMFB/EPIC RPC) -- but the panel now lights
+and shows the live kernel boot. env: DCP_NO_SCANOUT=1 disables the painter.

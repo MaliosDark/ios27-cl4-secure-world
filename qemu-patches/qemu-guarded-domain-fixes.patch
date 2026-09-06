@@ -1,0 +1,68 @@
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index dc9f79a..11166f4 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -10100,6 +10100,18 @@ int fp_exception_el(CPUARMState *env, int cur_el)
+ #ifndef CONFIG_USER_ONLY
+     uint64_t hcr_el2;
+ 
++    /*
++     * Apple GXF: the guarded execution domain (SPTM/TXM and the SK / exclave
++     * kernel "CL4") is handed an FP-enabled context by hardware. This model
++     * does not bank CPACR_EL1 across GXF and the SK genters before XNU has
++     * programmed CPACR, so honouring CPACR here would spuriously trap the
++     * guarded kernel's first Advanced-SIMD instruction (ESR EC 0x07). While a
++     * guarded domain is active, FP/SIMD is always accessible.
++     */
++    if (env->currentg) {
++        return 0;
++    }
++
+     /*
+      * CPACR and the CPTR registers don't exist before v6, so FP is
+      * always accessible
+diff --git a/target/arm/ptw.c b/target/arm/ptw.c
+index 699da26..8f023d1 100644
+--- a/target/arm/ptw.c
++++ b/target/arm/ptw.c
+@@ -3733,7 +3733,16 @@ static bool get_phys_addr_disabled(CPUARMState *env,
+         /* Fill in cacheattr a-la AArch64.TranslateAddressS1Off. */
+         if (r_el == 1) {
+             uint64_t hcr = arm_hcr_el2_eff_secstate(env, ptw->in_space);
+-            if (hcr & HCR_DC) {
++            /*
++             * Apple GXF: the guarded domain (SK / exclave kernel "CL4") runs
++             * its early boot with the MMU disabled but expects Normal memory
++             * semantics (its startup memcpy/memset use unaligned Advanced-SIMD
++             * accesses that are illegal against Device-nGnRnE memory). Real HW
++             * provides this via HCR_EL2.DC-style default-cacheable behaviour
++             * for the secure world; mirror it by treating MMU-off guarded data
++             * accesses as Normal Write-Back.
++             */
++            if ((hcr & HCR_DC) || env->currentg) {
+                 if (hcr & HCR_DCT) {
+                     memattr = 0xf0;  /* Tagged, Normal, WB, RWA */
+                 } else {
+diff --git a/target/arm/tcg/hflags.c b/target/arm/tcg/hflags.c
+index 0716ca9..6eeb910 100644
+--- a/target/arm/tcg/hflags.c
++++ b/target/arm/tcg/hflags.c
+@@ -39,6 +39,18 @@ static bool aprofile_require_alignment(CPUARMState *env, int el, uint64_t sctlr)
+         return true;
+     }
+ 
++    /*
++     * Apple GXF: the guarded domain (SK / exclave kernel "CL4") runs early
++     * boot with the MMU off but is given Normal (not Device) memory by the
++     * secure world, so its unaligned Advanced-SIMD startup code is legal.
++     * get_phys_addr_disabled() already returns Normal WB for guarded MMU-off
++     * accesses; match that here so the translator does not bake in an
++     * alignment requirement (unless the guarded kernel itself sets SCTLR.A).
++     */
++    if (env->currentg) {
++        return false;
++    }
++
+     /*
+      * With PMSA, when the MPU is disabled, all memory types in the
+      * default map are Normal, so don't need aligment enforcing.

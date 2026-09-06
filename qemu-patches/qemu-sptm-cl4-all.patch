@@ -1,0 +1,1521 @@
+diff --git a/hw/arm/apple_dtree.c b/hw/arm/apple_dtree.c
+index 3c26a80..32375e9 100644
+--- a/hw/arm/apple_dtree.c
++++ b/hw/arm/apple_dtree.c
+@@ -65,7 +65,9 @@ void *adt_get_prop_val(struct dtree_node *n, const char *prop_name) {
+ }
+ 
+ size_t adt_get_prop_len(struct dtree_node *n, const char *prop_name) {
+-    return STRIP_LENGTH_FLAGS(find_prop_in_node(n,prop_name)->length);
++    struct dtree_prop *p = find_prop_in_node(n,prop_name);
++    if (!p) return 0;
++    return STRIP_LENGTH_FLAGS(p->length);
+ }
+ 
+ struct dtree_node *adt_find_node(struct dtree_node *root, const char *path) {
+diff --git a/hw/arm/apple_regs.c b/hw/arm/apple_regs.c
+index 35c4460..b1ae9c5 100644
+--- a/hw/arm/apple_regs.c
++++ b/hw/arm/apple_regs.c
+@@ -114,8 +114,13 @@ void apple_regs_init(ARMCPU *cpu, AMCCState *amcc, struct dtree_node *dt_root, s
+     APPLE_STATE(env)->ctrr_a_lwr_el2 = REGION_START("BootKC-rx");
+     APPLE_STATE(env)->ctrr_a_upr_el2 = REGION_END("BootKC-rs");
+ 
+-    // CTRR region C: [DeviceTree, SPTM-rx]
+-    APPLE_STATE(env)->acc_ctrr_c_lwr_el2 = REGION_START("DeviceTree");
++    // CTRR region C: normally [DeviceTree, SPTM-rx]. With the CL4 secure kernel
++    // loaded, CL4-rx sits before DeviceTree as CTRR-protected code, so SPTM
++    // computes the region starting at CL4-rx -- match it. Presence is taken from
++    // info->cl4_f.buf (reliable; a device-tree probe for CL4-rx is not).
++    bool _have_cl4 = (info && info->cl4_f.buf != NULL);
++    APPLE_STATE(env)->acc_ctrr_c_lwr_el2 =
++        _have_cl4 ? REGION_START("CL4-rx") : REGION_START("DeviceTree");
+     APPLE_STATE(env)->acc_ctrr_c_upr_el2 = REGION_END("SPTM-rx");
+     if (amcc) {
+         amcc->ctrr_lwr[AMCC_BANK_C] = APPLE_STATE(env)->acc_ctrr_c_lwr_el2;
+@@ -126,9 +131,15 @@ void apple_regs_init(ARMCPU *cpu, AMCCState *amcc, struct dtree_node *dt_root, s
+     APPLE_STATE(env)->acc_ctxr_a_lwr_el2 = REGION_START("SPTM-rx");
+     APPLE_STATE(env)->acc_ctxr_a_upr_el2 = REGION_END("SPTM-rx");
+ 
+-    // CTXR region B: [CL4-dummypage]
+-    APPLE_STATE(env)->acc_ctxr_b_lwr_el2 = REGION_START("CL4-dummypage");
+-    APPLE_STATE(env)->acc_ctxr_b_upr_el2 = REGION_END("CL4-dummypage");
++    // CTXR region B: [CL4-dummypage] normally; [CL4-rx] when the secure kernel
++    // is loaded (SPTM computes it over the CL4 executable region).
++    if (_have_cl4) {
++        APPLE_STATE(env)->acc_ctxr_b_lwr_el2 = REGION_START("CL4-rx");
++        APPLE_STATE(env)->acc_ctxr_b_upr_el2 = REGION_END("CL4-rx");
++    } else {
++        APPLE_STATE(env)->acc_ctxr_b_lwr_el2 = REGION_START("CL4-dummypage");
++        APPLE_STATE(env)->acc_ctxr_b_upr_el2 = REGION_END("CL4-dummypage");
++    }
+ 
+     // CTXR region C: [TXM-rx, TXM-bx]
+     APPLE_STATE(env)->acc_ctxr_c_lwr_el2 = REGION_START("TXM-rx");
+diff --git a/hw/arm/darwin.c b/hw/arm/darwin.c
+index 51d240b..425ff66 100644
+--- a/hw/arm/darwin.c
++++ b/hw/arm/darwin.c
+@@ -21,6 +21,14 @@
+ #include "hw/arm/apple_amcc.h"
+ #include "xnu/patch.h"
+ #include "xnu/macho.h"
++#include "ui/console.h"
++#include "ui/surface.h"
++#include "hw/misc/unimp.h"
++#include "hw/core/irq.h"
++#include "hw/arm/apple_rtkit.h"
++#include "hw/arm/apple_dcp.h"
++#include "qemu/timer.h"
++#include "qemu/error-report.h"
+ 
+ // See device tree specification section 2.3.8: ranges
+ #define IO_RANGE_BASE_OFFSET     1
+@@ -30,6 +38,11 @@
+ 
+ #define EXPECTED_FIRMWARE_NAME   "qemu-sptm"
+ 
++// Boot framebuffer geometry. Kept small on purpose: there is no GPU here, every
++// frame is blitted under TCG, and XNU only needs somewhere to draw its console.
++#define DARWIN_FB_WIDTH          640
++#define DARWIN_FB_HEIGHT         1136
++
+ static char *g_default_args = (char*)"debug=0x8 kextlog=0xffff cpus=1 rd=md0 serial=7 -v -noprogress keepsyms=1 wdt=-1 -enable_kprintf_spam wlan-olyhal-abort";
+ 
+ #define CPACR_ENABLE_FPU         (( BIT(20) | BIT(21) ))
+@@ -49,6 +62,7 @@ MACHINE_CLASS_ARG(args);
+ MACHINE_CLASS_ARG(dtree);
+ MACHINE_CLASS_ARG(sptm);
+ MACHINE_CLASS_ARG(txm);
++MACHINE_CLASS_ARG(cl4);
+ MACHINE_CLASS_ARG(tc);
+ MACHINE_CLASS_ARG(ramdisk);
+ 
+@@ -211,6 +225,921 @@ static void check_dtree(struct dtree_node *dt_root) {
+     }
+ }
+ 
++typedef struct DarwinFB {
++    QemuConsole *con;
++} DarwinFB;
++
++static bool darwin_fb_update(void *opaque) {
++    DarwinFB *fb = opaque;
++    qemu_console_update_full(fb->con);
++    return true;
++}
++
++static const GraphicHwOps darwin_fb_ops = {
++    .gfx_update = darwin_fb_update,
++};
++
++// Scan out the pixels the kernel loader reserved for us. The surface points
++// straight at guest DRAM, so whatever XNU draws lands in the window with no
++// copy of our own.
++static void init_framebuffer(struct xnu_boot_info *info) {
++    if (!info->fb_size) return;
++
++    MemoryRegionSection sec =
++        memory_region_find(get_system_memory(), info->fb_base, info->fb_size);
++    if (!sec.mr) {
++        error_report("framebuffer: no RAM at 0x%" HWADDR_PRIx, info->fb_base);
++        return;
++    }
++
++    uint8_t *ptr = (uint8_t*)memory_region_get_ram_ptr(sec.mr) + sec.offset_within_region;
++    DarwinFB *fb = g_new0(DarwinFB, 1);
++
++    fb->con = qemu_graphic_console_create(NULL, 0, &darwin_fb_ops, fb);
++    qemu_console_set_surface(
++        fb->con,
++        qemu_create_displaysurface_from(info->fb_width, info->fb_height,
++                                        PIXMAN_x8r8g8b8, info->fb_width * 4, ptr));
++
++    printf("[darwin] boot framebuffer: %ux%u @ 0x%" HWADDR_PRIx "\n",
++           info->fb_width, info->fb_height, info->fb_base);
++    fflush(stdout);
++}
++
++
++
++// ---------------------------------------------------------------------------
++// Apple AIC v3 — a real interrupt controller
++//
++// The stock darwin-vm AIC is zeroed RAM with an IRQ count written into it: it
++// cannot deliver an interrupt at all, which is why every device-driven
++// subsystem in this machine is inert. This is enough of an AIC to accept
++// interrupt lines from devices and hand events to the guest.
++//
++// Register offsets come from the ADT node itself (rev/cap0/maxnumirq/
++// aicglbcfg/extint-baseaddress), event encoding from Linux
++// drivers/irqchip/irq-apple-aic.c (GPL-2):
++//     DIE[31:24] | TYPE[23:16] | NUM[15:0],  TYPE_IRQ = 1
++//
++// Masking is intentionally not modelled yet: during bring-up a spurious
++// interrupt is harmless, a missing one is not.
++// ---------------------------------------------------------------------------
++
++#define AIC_MAX_IRQS            0x1000
++#define AIC_EVENT_TYPE_IRQ      1
++
++typedef struct AicState {
++    MemoryRegion mr;
++    qemu_irq parent_irq;
++    uint32_t nr_irqs;
++    uint32_t rev_off, cap0_off, maxnumirq_off, glbcfg_off, iack_off;
++    uint32_t config;
++    uint32_t pending[AIC_MAX_IRQS / 32];
++    bool enabled;
++} AicState;
++
++static bool aic_next_pending(AicState *s, uint32_t *out) {
++    for (uint32_t w = 0; w < s->nr_irqs / 32; w++) {
++        if (!s->pending[w]) continue;
++        for (uint32_t b = 0; b < 32; b++) {
++            if (s->pending[w] & (1u << b)) { *out = w * 32 + b; return true; }
++        }
++    }
++    return false;
++}
++
++static int aic_deliver_trace = 24;
++
++static void aic_update(AicState *s) {
++    uint32_t irq;
++    bool assert_line = s->enabled && aic_next_pending(s, &irq);
++    if (assert_line && aic_deliver_trace > 0) {
++        aic_deliver_trace--;
++        printf("[aic] asserting CPU IRQ for hwirq %u (enabled=%d)\n", irq, s->enabled);
++        fflush(stdout);
++    }
++    qemu_set_irq(s->parent_irq, assert_line);
++}
++
++// One GPIO line per hardware interrupt, driven by devices.
++static void aic_set_irq(void *opaque, int n, int level) {
++    AicState *s = opaque;
++    if (n < 0 || n >= (int)s->nr_irqs) return;
++    if (level) s->pending[n / 32] |= 1u << (n % 32);
++    else       s->pending[n / 32] &= ~(1u << (n % 32));
++    aic_update(s);
++}
++
++static int aic_trace_budget = 40;
++
++static uint64_t aic_read(void *opaque, hwaddr off, unsigned size) {
++    AicState *s = opaque;
++
++    if (aic_trace_budget > 0) {
++        aic_trace_budget--;
++        printf("[aic] read  +0x%05llX\n", (unsigned long long)off);
++        fflush(stdout);
++    }
++
++    if (off == s->rev_off)       return 3;             // aic,3
++    if (off == s->cap0_off)      return s->nr_irqs;
++    if (off == s->maxnumirq_off) return s->nr_irqs;
++    if (off == s->glbcfg_off)    return s->config;
++
++    if (off == s->iack_off) {
++        // Acknowledge: hand over the lowest pending interrupt and retire it.
++        uint32_t irq;
++        if (aic_deliver_trace > 0) {
++            aic_deliver_trace--;
++            printf("[aic] guest read IACK\n");
++            fflush(stdout);
++        }
++        if (!aic_next_pending(s, &irq)) return 0;
++        printf("[aic] IACK -> delivering hwirq %u\n", irq);
++        fflush(stdout);
++        s->pending[irq / 32] &= ~(1u << (irq % 32));
++        aic_update(s);
++        return ((uint32_t)AIC_EVENT_TYPE_IRQ << 16) | (irq & 0xffff);
++    }
++
++    return 0;
++}
++
++static void aic_write(void *opaque, hwaddr off, uint64_t val, unsigned size) {
++    AicState *s = opaque;
++
++    if (aic_trace_budget > 0) {
++        aic_trace_budget--;
++        printf("[aic] write +0x%05llX = 0x%llX\n",
++               (unsigned long long)off, (unsigned long long)val);
++        fflush(stdout);
++    }
++    if (off == s->glbcfg_off) {
++        s->config = (uint32_t)val;
++        s->enabled = (val & 1) != 0;
++        aic_update(s);
++    }
++    // Mask set/clear and per-irq config are accepted and ignored for now.
++}
++
++static const MemoryRegionOps aic_ops = {
++    .read = aic_read,
++    .write = aic_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 8,
++};
++
++static AicState *g_aic;
++
++static uint32_t adt_u32(struct dtree_node *n, const char *prop, uint32_t dflt) {
++    uint32_t *p = adt_get_prop_val(n, prop);
++    return p ? *p : dflt;
++}
++
++static void init_aic_real(struct dtree_node *dt_root, uint64_t iobase, ARMCPU *cpu) {
++    struct dtree_node *aic = adt_find_node(dt_root, "arm-io/aic");
++    struct adt_io_reg *reg = adt_get_prop_val(aic, "reg");
++    if (!reg) { fprintf(stderr, "aic: no reg\n"); return; }
++
++    AicState *s = g_new0(AicState, 1);
++    s->nr_irqs       = AIC_MAX_IRQS;
++    s->rev_off       = adt_u32(aic, "rev-offset", 0x0);
++    s->cap0_off      = adt_u32(aic, "cap0-offset", 0x4);
++    s->maxnumirq_off = adt_u32(aic, "maxnumirq-offset", 0xc);
++    s->glbcfg_off    = adt_u32(aic, "aicglbcfg-offset", 0x14);
++    s->iack_off      = 0x1000;   // dt_fixup.py publishes aic-iack-offset = 0x1000
++
++    uint64_t *iack = adt_get_prop_val(aic, "aic-iack-offset");
++    if (iack) s->iack_off = (uint32_t)*iack;
++
++    memory_region_init_io(&s->mr, NULL, &aic_ops, s, "aic", reg[0].len);
++    memory_region_add_subregion(get_system_memory(), reg[0].base + iobase, &s->mr);
++
++    s->parent_irq = qdev_get_gpio_in(DEVICE(cpu), ARM_CPU_IRQ);
++    g_aic = s;
++
++    printf("[darwin] aic v3: 0x%llX + 0x%llX, %u irqs, iack@0x%x\n",
++           (unsigned long long)(reg[0].base + iobase),
++           (unsigned long long)reg[0].len, s->nr_irqs, s->iack_off);
++    fflush(stdout);
++}
++
++// Devices call this to raise/lower one of their device tree interrupts.
++static qemu_irq aic_irq_line(uint32_t hwirq) {
++    if (!g_aic || hwirq >= g_aic->nr_irqs) return NULL;
++    return qemu_allocate_irq(aic_set_irq, g_aic, hwirq);
++}
++
++
++// ---------------------------------------------------------------------------
++// Apple ASC mailbox + RTKit management endpoint (the DCP's front door)
++//
++// We stand in for the coprocessor. The guest's RTBuddy driver boots the IOP and
++// then waits for it to say HELLO; everything after that is a message exchange
++// on endpoint 0.
++//
++// Mailbox register layout: Linux drivers/soc/apple/mailbox.c (GPL-2).
++// RTKit protocol:          Linux drivers/soc/apple/rtkit.c   (GPL-2).
++//
++// Direction convention, from the application processor's point of view:
++//   A2I  AP -> IOP   guest writes SEND, we consume
++//   I2A  IOP -> AP   we produce, guest reads RECV
++// ---------------------------------------------------------------------------
++
++#define ASC_A2I_CONTROL   0x110
++#define ASC_A2I_SEND0     0x800
++#define ASC_A2I_SEND1     0x808
++#define ASC_A2I_RECV0     0x810
++#define ASC_A2I_RECV1     0x818
++#define ASC_I2A_CONTROL   0x114
++#define ASC_I2A_SEND0     0x820
++#define ASC_I2A_SEND1     0x828
++#define ASC_I2A_RECV0     0x830
++#define ASC_I2A_RECV1     0x838
++#define ASC_CTRL_FULL     BIT(16)
++#define ASC_CTRL_EMPTY    BIT(17)
++
++// Taking the coprocessor out of reset, and the handshake ANS's driver polls for.
++// Both from Linux drivers/nvme/host/apple.c (GPL-2); the ASC wrapper is shared,
++// so the CPU control register is the same for every iop,ascwrap-v6 block.
++#define ASC_COPROC_CPU_CONTROL      0x44
++#define ASC_COPROC_CPU_CONTROL_RUN  BIT(4)
++#define ASC_ANS_BOOT_STATUS         0x1300
++#define ASC_ANS_BOOT_STATUS_OK      0xde71ce55
++
++#define RTKIT_TYPE_SHIFT      52          // msg0 bits [59:52]
++#define RTKIT_TYPE_MASK       0xffULL
++#define RTKIT_MGMT_HELLO       1
++#define RTKIT_MGMT_HELLO_REPLY 2
++#define RTKIT_MGMT_STARTEP     5
++#define RTKIT_MGMT_IOP_PWR     6
++#define RTKIT_MGMT_IOP_PWR_ACK 7
++#define RTKIT_MGMT_EPMAP       8
++#define RTKIT_MGMT_AP_PWR      0xb
++#define RTKIT_VER_MIN          11
++#define RTKIT_VER_MAX          12
++#define RTKIT_EPMAP_LAST       BIT_ULL(51)
++
++typedef struct AscMsg { uint64_t msg0; uint32_t msg1; } AscMsg;
++
++typedef struct AscMboxState {
++    MemoryRegion mr;
++    qemu_irq irq;
++    AscMsg q[32];
++    int head, count;
++    uint64_t a2i_msg0;
++    bool hello_sent;
++    bool running;
++    QEMUTimer *announce;
++    bool is_ans;
++    uint32_t cpu_control;
++    const char *name;
++} AscMboxState;
++
++static void asc_update_irq(AscMboxState *s) {
++    qemu_set_irq(s->irq, s->count > 0);
++}
++
++static void asc_push(AscMboxState *s, uint64_t msg0, uint32_t ep) {
++    if (s->count == (int)ARRAY_SIZE(s->q)) return;
++    int slot = (s->head + s->count) % ARRAY_SIZE(s->q);
++    s->q[slot].msg0 = msg0;
++    s->q[slot].msg1 = ep;
++    s->count++;
++    asc_update_irq(s);
++}
++
++static void asc_send_mgmt(AscMboxState *s, uint64_t type, uint64_t payload) {
++    asc_push(s, (type << RTKIT_TYPE_SHIFT) | payload, 0);
++}
++
++static void asc_boot(AscMboxState *s) {
++    if (s->hello_sent) return;
++    s->hello_sent = true;
++    // HELLO carries the protocol range we claim to speak.
++    asc_send_mgmt(s, RTKIT_MGMT_HELLO,
++                  ((uint64_t)RTKIT_VER_MAX << 16) | RTKIT_VER_MIN);
++    printf("[asc:%s] coprocessor boot -> HELLO(min=%d,max=%d)\n",
++           s->name, RTKIT_VER_MIN, RTKIT_VER_MAX);
++    fflush(stdout);
++}
++
++static void asc_handle(AscMboxState *s, uint64_t msg0, uint32_t msg1) {
++    uint32_t ep = msg1 & 0xff;
++    uint64_t type = (msg0 >> RTKIT_TYPE_SHIFT) & RTKIT_TYPE_MASK;
++
++    if (ep != 0) {
++        printf("[asc:%s] msg on endpoint 0x%x (ignored)\n", s->name, ep);
++        fflush(stdout);
++        return;
++    }
++
++    switch (type) {
++    case RTKIT_MGMT_HELLO_REPLY: {
++        // Advertise the endpoints the guest drivers look for. The display
++        // driver (AppleDCPLinkServiceSoC) matches an RTBuddyEndpointService
++        // named DCPEndpoint24, i.e. endpoint 0x24, so the DCP must offer it.
++        uint64_t bitmap = s->is_ans ? 0 : (1ULL << 0x24);
++        printf("[asc:%s] HELLO_REPLY -> EPMAP bitmap 0x%llX\n",
++               s->name, (unsigned long long)bitmap);
++        asc_send_mgmt(s, RTKIT_MGMT_EPMAP,
++                      RTKIT_EPMAP_LAST | (bitmap & 0xffffffffULL));
++        break;
++    }
++    case RTKIT_MGMT_EPMAP:
++        printf("[asc:%s] EPMAP acknowledged\n", s->name);
++        break;
++    case RTKIT_MGMT_STARTEP:
++        printf("[asc:%s] STARTEP ep=0x%llx\n", s->name,
++               (unsigned long long)((msg0 >> 32) & 0xff));
++        break;
++    case RTKIT_MGMT_IOP_PWR:
++        printf("[asc:%s] SET_IOP_PWR_STATE 0x%llx -> ack\n", s->name,
++               (unsigned long long)(msg0 & 0xffff));
++        asc_send_mgmt(s, RTKIT_MGMT_IOP_PWR_ACK, msg0 & 0xffff);
++        break;
++    case RTKIT_MGMT_AP_PWR:
++        printf("[asc:%s] SET_AP_PWR_STATE 0x%llx -> ack\n", s->name,
++               (unsigned long long)(msg0 & 0xffff));
++        asc_send_mgmt(s, RTKIT_MGMT_AP_PWR, msg0 & 0xffff);
++        break;
++    default:
++        printf("[asc:%s] mgmt type %llu (unhandled)\n", s->name,
++               (unsigned long long)type);
++        break;
++    }
++    fflush(stdout);
++}
++
++static int asc_read_trace = 60;
++
++static uint64_t asc_read(void *opaque, hwaddr off, unsigned size) {
++    AscMboxState *s = opaque;
++
++    if (asc_read_trace > 0 && s->hello_sent) {
++        asc_read_trace--;
++        printf("[asc:%s] read  +0x%03llX\n", s->name, (unsigned long long)off);
++        fflush(stdout);
++    }
++
++    switch (off) {
++    case ASC_COPROC_CPU_CONTROL:
++        return s->cpu_control;
++    case ASC_ANS_BOOT_STATUS:
++        // The ANS driver spins here until the coprocessor reports it is up.
++        return (s->is_ans && s->running) ? ASC_ANS_BOOT_STATUS_OK : 0;
++    case ASC_I2A_CONTROL:
++        return s->count ? 0 : ASC_CTRL_EMPTY;
++    case ASC_A2I_CONTROL:
++        return ASC_CTRL_EMPTY;          // we always drain immediately
++    case ASC_I2A_RECV0:
++        return s->count ? s->q[s->head].msg0 : 0;
++    case ASC_I2A_RECV1: {
++        if (!s->count) return 0;
++        uint32_t m1 = s->q[s->head].msg1;
++        s->head = (s->head + 1) % ARRAY_SIZE(s->q);
++        s->count--;
++        asc_update_irq(s);
++        return m1;
++    }
++    default:
++        return 0;
++    }
++}
++
++static void asc_write(void *opaque, hwaddr off, uint64_t val, unsigned size) {
++    AscMboxState *s = opaque;
++
++    printf("[asc:%s] write +0x%03llX = 0x%llX\n", s->name,
++           (unsigned long long)off, (unsigned long long)val);
++    fflush(stdout);
++
++    switch (off) {
++    case ASC_COPROC_CPU_CONTROL:
++        s->cpu_control = (uint32_t)val;
++        if ((val & ASC_COPROC_CPU_CONTROL_RUN) && !s->running) {
++            s->running = true;
++            printf("[asc:%s] CPU_CONTROL RUN -> coprocessor started\n", s->name);
++            fflush(stdout);
++            asc_boot(s);
++        }
++        return;
++    case ASC_A2I_SEND0:
++        s->a2i_msg0 = val;
++        break;
++    case ASC_A2I_SEND1:
++        asc_handle(s, s->a2i_msg0, (uint32_t)val);
++        break;
++    default:
++        break;
++    }
++}
++
++static const MemoryRegionOps asc_ops = {
++    .read = asc_read,
++    .write = asc_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 8,
++};
++
++
++
++// ---------------------------------------------------------------------------
++// Apple PMGR power/clock gating
++//
++// Every block behind a power gate has a PS register: the driver writes the
++// state it wants into PS_TARGET and then spins until PS_ACTUAL reflects it.
++// With this region unmapped the read is always zero, so bringing a coprocessor
++// out of power gate never completes -- which is why nothing ever reached the
++// ASC mailbox. Transitions here are instantaneous: ACTUAL follows TARGET.
++//
++// Field layout from Linux drivers/pmdomain/apple/pmgr-pwrstate.c (GPL-2).
++// ---------------------------------------------------------------------------
++
++#define PMGR_PS_TARGET_SHIFT   0
++#define PMGR_PS_TARGET_MASK    0xf
++#define PMGR_PS_ACTUAL_SHIFT   4
++#define PMGR_PS_ACTUAL_MASK    0xf
++#define PMGR_WAS_PWRGATED      BIT(8)
++#define PMGR_WAS_CLKGATED      BIT(9)
++
++typedef struct PmgrState {
++    MemoryRegion mr;
++    uint32_t *regs;
++    size_t nregs;
++    int trace;
++} PmgrState;
++
++static uint64_t pmgr_read(void *opaque, hwaddr off, unsigned size) {
++    PmgrState *s = opaque;
++    size_t i = off >> 2;
++    uint64_t v = (i < s->nregs) ? s->regs[i] : 0;
++    if (s->trace > 0) {
++        s->trace--;
++        printf("[pmgr] read  +0x%06llX = 0x%llX\n",
++               (unsigned long long)off, (unsigned long long)v);
++        fflush(stdout);
++    }
++    return v;
++}
++
++static void pmgr_write(void *opaque, hwaddr off, uint64_t val, unsigned size) {
++    PmgrState *s = opaque;
++    size_t i = off >> 2;
++    if (i >= s->nregs) return;
++
++    uint32_t v = (uint32_t)val;
++    uint32_t target = (v >> PMGR_PS_TARGET_SHIFT) & PMGR_PS_TARGET_MASK;
++
++    // Report the transition as already complete, and clear the sticky
++    // "was gated" bits the driver acknowledges by writing them back.
++    v &= ~(PMGR_PS_ACTUAL_MASK << PMGR_PS_ACTUAL_SHIFT);
++    v |= target << PMGR_PS_ACTUAL_SHIFT;
++    v &= ~(PMGR_WAS_PWRGATED | PMGR_WAS_CLKGATED);
++    s->regs[i] = v;
++
++    if (s->trace > 0) {
++        s->trace--;
++        printf("[pmgr] write +0x%06llX = 0x%llX -> ps %u\n",
++               (unsigned long long)off, (unsigned long long)val, target);
++        fflush(stdout);
++    }
++}
++
++static const MemoryRegionOps pmgr_ops = {
++    .read = pmgr_read,
++    .write = pmgr_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 8,
++};
++
++static void init_pmgr(struct dtree_node *dt_root, uint64_t iobase) {
++    struct dtree_node *n = adt_find_node(dt_root, "arm-io/pmgr");
++    if (!n) { printf("[pmgr] no arm-io/pmgr node\n"); return; }
++    struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++    size_t len = reg ? adt_get_prop_len(n, "reg") : 0;
++    if (!reg || len < sizeof(*reg)) { printf("[pmgr] no reg\n"); return; }
++
++    for (size_t j = 0; j < len / sizeof(*reg); j++) {
++        if (!reg[j].len) continue;
++        PmgrState *s = g_new0(PmgrState, 1);
++        s->nregs = reg[j].len >> 2;
++        s->regs = g_new0(uint32_t, s->nregs);
++        s->trace = (j == 0) ? 30 : 0;
++        char *nm = g_strdup_printf("pmgr[%zu]", j);
++        memory_region_init_io(&s->mr, NULL, &pmgr_ops, s, nm, reg[j].len);
++        memory_region_add_subregion_overlap(get_system_memory(),
++                                            reg[j].base + iobase, &s->mr, 1);
++        printf("[pmgr] %s 0x%llX + 0x%llX\n", nm,
++               (unsigned long long)(reg[j].base + iobase),
++               (unsigned long long)reg[j].len);
++        g_free(nm);
++    }
++    fflush(stdout);
++}
++
++// ---------------------------------------------------------------------------
++// ANS NVMe register window
++//
++// The ANS block has two separate MMIO regions: the ASC mailbox (reg[0], where
++// CPU_CONTROL lives) and a 16MB NVMe window (reg[4]) holding BOOT_STATUS, the
++// doorbells and the NVMMU. The driver polls BOOT_STATUS there for the
++// coprocessor's ready magic, so leaving it unmapped strands start().
++//
++// Offsets from Linux drivers/nvme/host/apple.c (GPL-2).
++// ---------------------------------------------------------------------------
++
++#define ANS_NVME_BOOT_STATUS        0x1300
++#define ANS_NVME_BOOT_STATUS_OK     0xde71ce55
++#define ANS_NVME_ACQ_DB             0x1004
++#define ANS_NVME_IOCQ_DB            0x100c
++#define ANS_NVME_MAX_PEND_CMDS      0x1210
++#define ANS_NVME_LINEAR_SQ_CTRL     0x24908
++#define ANS_NVMMU_NUM_TCBS          0x28100
++#define ANS_NVMMU_TCB_STAT          0x28120
++
++typedef struct AnsNvmeState {
++    MemoryRegion mr;
++    AscMboxState *asc;     // so BOOT_STATUS can follow the coprocessor
++    AppleRTKit *rtk;       // ...or the RTKit engine, when that is driving it
++    uint32_t linear_sq_ctrl;
++    uint32_t num_tcbs;
++    int trace;
++} AnsNvmeState;
++
++static uint64_t ans_nvme_read(void *opaque, hwaddr off, unsigned size) {
++    AnsNvmeState *s = opaque;
++    uint64_t v = 0;
++
++    switch (off) {
++    case ANS_NVME_BOOT_STATUS:
++        if (s->rtk) {
++            v = s->rtk->running ? ANS_NVME_BOOT_STATUS_OK : 0;
++        } else {
++            v = (s->asc && s->asc->running) ? ANS_NVME_BOOT_STATUS_OK : 0;
++        }
++        break;
++    case ANS_NVME_LINEAR_SQ_CTRL:
++        v = s->linear_sq_ctrl;
++        break;
++    case ANS_NVMMU_NUM_TCBS:
++        v = s->num_tcbs;
++        break;
++    default:
++        break;
++    }
++
++    if (s->trace > 0) {
++        s->trace--;
++        printf("[ans-nvme] read  +0x%05llX = 0x%llX\n",
++               (unsigned long long)off, (unsigned long long)v);
++        fflush(stdout);
++    }
++    return v;
++}
++
++static void ans_nvme_write(void *opaque, hwaddr off, uint64_t val, unsigned size) {
++    AnsNvmeState *s = opaque;
++
++    if (s->trace > 0) {
++        s->trace--;
++        printf("[ans-nvme] write +0x%05llX = 0x%llX\n",
++               (unsigned long long)off, (unsigned long long)val);
++        fflush(stdout);
++    }
++
++    switch (off) {
++    case ANS_NVME_LINEAR_SQ_CTRL: s->linear_sq_ctrl = (uint32_t)val; break;
++    case ANS_NVMMU_NUM_TCBS:      s->num_tcbs = (uint32_t)val; break;
++    default: break;
++    }
++}
++
++static const MemoryRegionOps ans_nvme_ops = {
++    .read = ans_nvme_read,
++    .write = ans_nvme_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 8,
++};
++
++// Nothing in a restore ramdisk ever demands a coprocessor, so RTBuddy never
++// takes one out of reset and the mailbox stays silent forever. Here the
++// coprocessor announces itself instead: after the guest has had time to attach
++// its driver, we behave as if firmware had booted on its own and say HELLO.
++// Real silicon does not do this; it is a way to find out whether RTBuddy will
++// carry on with the handshake when the other side speaks first.
++static void asc_announce_cb(void *opaque) {
++    AscMboxState *s = opaque;
++    if (s->hello_sent) return;
++    printf("[asc:%s] self-announce: pretending firmware booted\n", s->name);
++    fflush(stdout);
++    s->running = true;
++    asc_boot(s);
++}
++
++static AscMboxState *init_one_asc(struct dtree_node *dt_root, uint64_t iobase,
++                         const char *path, const char *label, bool is_ans) {
++    struct dtree_node *n = adt_find_node(dt_root, path);
++    if (!n) { printf("[asc] no %s node\n", path); return NULL; }
++
++    struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++    size_t rlen = reg ? adt_get_prop_len(n, "reg") : 0;
++    if (!reg || rlen < sizeof(*reg)) { printf("[asc] %s has no reg\n", label); return NULL; }
++
++    uint32_t *irqs = adt_get_prop_val(n, "interrupts");
++    size_t ilen = irqs ? adt_get_prop_len(n, "interrupts") : 0;
++
++    AscMboxState *s = g_new0(AscMboxState, 1);
++    s->name = label;
++    s->is_ans = is_ans;
++    memory_region_init_io(&s->mr, NULL, &asc_ops, s, label, reg[0].len);
++    memory_region_add_subregion_overlap(get_system_memory(),
++                                        reg[0].base + iobase, &s->mr, 1);
++
++    if (irqs && ilen >= 4) {
++        s->irq = aic_irq_line(irqs[0]);
++        printf("[asc:%s] 0x%llX + 0x%llX, irq %u\n", label,
++               (unsigned long long)(reg[0].base + iobase),
++               (unsigned long long)reg[0].len, irqs[0]);
++    } else {
++        printf("[asc:%s] mapped without an interrupt line\n", label);
++    }
++
++    const char *delay = getenv("DARWIN_ASC_ANNOUNCE");
++    if (delay) {
++        int secs = atoi(delay);
++        if (secs <= 0) secs = 25;
++        s->announce = timer_new_ms(QEMU_CLOCK_VIRTUAL, asc_announce_cb, s);
++        timer_mod(s->announce,
++                  qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + (int64_t)secs * 1000);
++        printf("[asc:%s] will self-announce in %ds\n", label, secs);
++    }
++    fflush(stdout);
++    return s;
++}
++
++static AscMboxState *g_ans_asc;
++static AppleRTKit *g_ans_rtk;
++
++static void init_ans_nvme(struct dtree_node *dt_root, uint64_t iobase) {
++    struct dtree_node *n = adt_find_node(dt_root, "arm-io/ans");
++    if (!n) return;
++    struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++    size_t len = reg ? adt_get_prop_len(n, "reg") : 0;
++    size_t count = len / sizeof(*reg);
++
++    // The NVMe window is the large one; on t8140 it is the 16MB entry.
++    int best = -1;
++    for (size_t i = 0; i < count; i++) {
++        if (reg[i].len < 0x100000) continue;
++        if (best < 0 || reg[i].len > reg[best].len) best = (int)i;
++    }
++    if (best < 0) { printf("[ans-nvme] no large reg window\n"); return; }
++
++    AnsNvmeState *s = g_new0(AnsNvmeState, 1);
++    s->asc = g_ans_asc;
++    s->rtk = g_ans_rtk;
++    s->trace = 60;
++    memory_region_init_io(&s->mr, NULL, &ans_nvme_ops, s, "ans-nvme", reg[best].len);
++    memory_region_add_subregion_overlap(get_system_memory(),
++                                        reg[best].base + iobase, &s->mr, 1);
++    printf("[ans-nvme] 0x%llX + 0x%llX (reg[%d])\n",
++           (unsigned long long)(reg[best].base + iobase),
++           (unsigned long long)reg[best].len, best);
++    fflush(stdout);
++}
++
++static void init_asc_mailbox(struct dtree_node *dt_root, uint64_t iobase) {
++    init_one_asc(dt_root, iobase, "arm-io/dcp", "dcp", false);
++    g_ans_asc = init_one_asc(dt_root, iobase, "arm-io/ans", "ans", true);
++    init_ans_nvme(dt_root, iobase);
++}
++
++// The RTKit engine: a fuller coprocessor model than the inline mailbox above.
++// DARWIN_RTKIT=1 selects it for the DCP so the display driver can get past the
++// handshake and start speaking its own protocol to us.
++static void init_rtkit_dcp(struct dtree_node *dt_root, uint64_t iobase,
++                           struct xnu_boot_info *info) {
++    struct dtree_node *n = adt_find_node(dt_root, "arm-io/dcp");
++    if (!n) { printf("[rtkit] no arm-io/dcp node\n"); return; }
++
++    struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++    size_t rlen = reg ? adt_get_prop_len(n, "reg") : 0;
++    if (!reg || rlen < sizeof(*reg)) { printf("[rtkit] dcp has no reg\n"); return; }
++
++    uint32_t *irqs = adt_get_prop_val(n, "interrupts");
++    size_t ilen = irqs ? adt_get_prop_len(n, "interrupts") : 0;
++    qemu_irq line = (irqs && ilen >= 4) ? aic_irq_line(irqs[0]) : NULL;
++
++    AppleRTKit *rtk = apple_rtkit_new("dcp", reg[0].base + iobase,
++                                      reg[0].len, line);
++    apple_dcp_attach(rtk, info->fb_width ? info->fb_width : DARWIN_FB_WIDTH,
++                     info->fb_height ? info->fb_height : DARWIN_FB_HEIGHT,
++                     info->fb_base);
++
++    const char *ann = getenv("DARWIN_RTKIT_ANNOUNCE");
++    if (ann) {
++        apple_rtkit_announce_after(rtk, atoi(ann) > 0 ? atoi(ann) : 30);
++    }
++}
++
++// Point the RTKit engine at the ANS instead, whose RTBuddy driver has no secure
++// route and comes up cleanly -- a way to validate the engine's handshake
++// against a real Apple driver that will actually drive it.
++static void init_rtkit_ans(struct dtree_node *dt_root, uint64_t iobase,
++                           struct xnu_boot_info *info) {
++    struct dtree_node *n = adt_find_node(dt_root, "arm-io/ans");
++    if (!n) { printf("[rtkit] no arm-io/ans node\n"); return; }
++    struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++    size_t rlen = reg ? adt_get_prop_len(n, "reg") : 0;
++    if (!reg || rlen < sizeof(*reg)) { printf("[rtkit] ans has no reg\n"); return; }
++    uint32_t *irqs = adt_get_prop_val(n, "interrupts");
++    size_t ilen = irqs ? adt_get_prop_len(n, "interrupts") : 0;
++    qemu_irq line = (irqs && ilen >= 4) ? aic_irq_line(irqs[0]) : NULL;
++    AppleRTKit *rtk = apple_rtkit_new("ans", reg[0].base + iobase, reg[0].len, line);
++    g_ans_rtk = rtk;
++    init_ans_nvme(dt_root, iobase);   /* BOOT_STATUS/doorbells live in a second window */
++    const char *ann = getenv("DARWIN_RTKIT_ANNOUNCE");
++    if (ann) apple_rtkit_announce_after(rtk, atoi(ann) > 0 ? atoi(ann) : 30);
++}
++
++// ---------------------------------------------------------------------------
++// Apple DART (t8110) — minimal model
++//
++// Just enough register behaviour for the iOS AppleDART driver to finish
++// initialising. It does not translate addresses; nothing in this machine DMAs
++// yet. Without it the driver spins during bring-up and the guest never boots.
++//
++// Register layout follows Linux drivers/iommu/apple-dart.c (GPL-2).
++// ---------------------------------------------------------------------------
++
++#define DART_T8110_PARAMS3          0x008
++#define DART_T8110_PARAMS4          0x00c
++#define DART_T8110_TLB_CMD          0x080
++#define DART_T8110_ERROR            0x100
++#define DART_T8110_ERROR_MASK       0x104
++#define DART_T8110_PROTECT          0x200
++#define DART_T8110_UNPROTECT        0x204
++#define DART_T8110_PROTECT_LOCK     0x208
++#define DART_T8110_ENABLE_STREAMS   0xc00
++#define DART_T8110_DISABLE_STREAMS  0xc20
++#define DART_T8110_TCR              0x1000
++#define DART_T8110_TTBR             0x1400
++#define DART_SID_COUNT              256
++
++typedef struct DartState {
++    MemoryRegion mr;
++    uint32_t tcr[DART_SID_COUNT];
++    uint32_t ttbr[DART_SID_COUNT];
++    uint32_t enabled_streams;
++    uint32_t protect;
++    uint32_t error_mask;
++} DartState;
++
++static uint64_t dart_read(void *opaque, hwaddr off, unsigned size) {
++    DartState *s = opaque;
++
++    if (off >= DART_T8110_TTBR && off < DART_T8110_TTBR + DART_SID_COUNT * 4) {
++        return s->ttbr[(off - DART_T8110_TTBR) >> 2];
++    }
++    if (off >= DART_T8110_TCR && off < DART_T8110_TCR + DART_SID_COUNT * 4) {
++        return s->tcr[(off - DART_T8110_TCR) >> 2];
++    }
++
++    switch (off) {
++    case DART_T8110_PARAMS3:
++        // PA width 42, VA width 32, version 1.0
++        return (42u << 24) | (32u << 16) | (1u << 8);
++    case DART_T8110_PARAMS4:
++        // 16 clients, DART_SID_COUNT stream ids
++        return (16u << 16) | DART_SID_COUNT;
++    case DART_T8110_TLB_CMD:
++        // Bit 31 is BUSY. Always report idle: our flushes are instantaneous,
++        // so the driver's poll loop exits immediately.
++        return 0;
++    case DART_T8110_ERROR:
++        return 0;
++    case DART_T8110_ERROR_MASK:
++        return s->error_mask;
++    case DART_T8110_PROTECT:
++        return s->protect;
++    case DART_T8110_ENABLE_STREAMS:
++        return s->enabled_streams;
++    default:
++        return 0;
++    }
++}
++
++static void dart_write(void *opaque, hwaddr off, uint64_t val, unsigned size) {
++    DartState *s = opaque;
++
++    if (off >= DART_T8110_TTBR && off < DART_T8110_TTBR + DART_SID_COUNT * 4) {
++        s->ttbr[(off - DART_T8110_TTBR) >> 2] = (uint32_t)val;
++        return;
++    }
++    if (off >= DART_T8110_TCR && off < DART_T8110_TCR + DART_SID_COUNT * 4) {
++        s->tcr[(off - DART_T8110_TCR) >> 2] = (uint32_t)val;
++        return;
++    }
++
++    switch (off) {
++    case DART_T8110_ERROR_MASK:      s->error_mask = val; break;
++    case DART_T8110_PROTECT:         s->protect |= val; break;
++    case DART_T8110_UNPROTECT:       s->protect &= ~(uint32_t)val; break;
++    case DART_T8110_ENABLE_STREAMS:  s->enabled_streams |= val; break;
++    case DART_T8110_DISABLE_STREAMS: s->enabled_streams &= ~(uint32_t)val; break;
++    default: break;   // TLB_CMD and friends: accepted and completed instantly
++    }
++}
++
++static const MemoryRegionOps dart_ops = {
++    .read = dart_read,
++    .write = dart_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 4,
++    .valid.max_access_size = 8,
++};
++
++static void create_dart(const char *name, hwaddr base, uint64_t len) {
++    DartState *s = g_new0(DartState, 1);
++    memory_region_init_io(&s->mr, NULL, &dart_ops, s, name, len);
++    memory_region_add_subregion(get_system_memory(), base, &s->mr);
++    printf("[darwin] dart %-20s 0x%llX + 0x%llX\n", name,
++           (unsigned long long)base, (unsigned long long)len);
++}
++
++static void init_darts(struct dtree_node *dt_root, uint64_t iobase) {
++    static const char *const darts[] = {
++        "arm-io/dart-disp0",
++        "arm-io/dart-dcp",
++    };
++
++    for (size_t i = 0; i < ARRAY_SIZE(darts); i++) {
++        struct dtree_node *n = adt_find_node(dt_root, darts[i]);
++        if (!n) continue;
++        struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++        size_t len = reg ? adt_get_prop_len(n, "reg") : 0;
++        if (!reg || len < sizeof(*reg)) continue;
++        for (size_t j = 0; j < len / sizeof(*reg); j++) {
++            if (0 == reg[j].len) continue;
++            char *nm = g_strdup_printf("%s[%zu]", darts[i], j);
++            create_dart(nm, reg[j].base + iobase, reg[j].len);
++            g_free(nm);
++        }
++    }
++    fflush(stdout);
++}
++
++// Bring-up aid: map every register range of the display stack as a logging
++// dummy device, so we can see exactly what the iOS drivers touch. Pair with
++// a device tree built with EXTRA_DRIVERS so IOKit actually matches them, and
++// run qemu with -d unimp to get the trace.
++static void init_display_stub(struct dtree_node *dt_root, uint64_t iobase) {
++    static const char *const nodes[] = {
++        "arm-io/disp0",
++        "arm-io/dcp",
++        "arm-io/dcp0-expert",
++        "arm-io/dart-disp0",
++        "arm-io/dart-dcp",
++        "arm-io/display-crossbar0",
++    };
++
++    // DARWIN_DISP=all stubs everything; otherwise it is a substring filter so
++    // we can bisect which range upsets the boot.
++    const char *want = getenv("DARWIN_DISP");
++    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
++        if (want && strcmp(want, "all") && strcmp(want, "1") &&
++            !strstr(nodes[i], want)) {
++            continue;
++        }
++        struct dtree_node *n = adt_find_node(dt_root, nodes[i]);
++        if (!n) {
++            printf("[darwin] display: %s absent from dtree\n", nodes[i]);
++            continue;
++        }
++        struct adt_io_reg *reg = adt_get_prop_val(n, "reg");
++        size_t len = reg ? adt_get_prop_len(n, "reg") : 0;
++        if (!reg || len < sizeof(*reg)) {
++            printf("[darwin] display: %s has no reg\n", nodes[i]);
++            continue;
++        }
++        for (size_t j = 0; j < len / sizeof(*reg); j++) {
++            if (0 == reg[j].len) continue;
++            char *nm = g_strdup_printf("%s[%zu]", nodes[i], j);
++            hwaddr base = reg[j].base + iobase;
++            printf("[darwin] display stub %-26s 0x%llX + 0x%llX\n",
++                   nm, (unsigned long long)base, (unsigned long long)reg[j].len);
++            create_unimplemented_device(nm, base, reg[j].len);
++            g_free(nm);
++        }
++    }
++    fflush(stdout);
++}
++
+ static void darwin_init(MachineState *ms) {
+     DarwinState *s = DARWIN_MACHINE(ms);
+     struct xnu_boot_info *info = &s->bootinfo;
+@@ -221,6 +1150,12 @@ static void darwin_init(MachineState *ms) {
+     info->dtree_f = check_and_open(info->dtree, "error opening device tree");
+     info->tc_f = check_and_open(info->tc, "error opening trust cache");
+     info->ramdisk_f = check_and_open(info->ramdisk, "error opening ramdisk");
++    if (info->cl4) {
++        info->cl4_f = check_and_open(info->cl4, "error opening CL4 secure kernel");
++        printf("[cl4] secure kernel: %llu bytes\n",
++               (unsigned long long)info->cl4_f.len);
++        fflush(stdout);
++    }
+     if (info->sptm) {
+         info->sptm_f = check_and_open(info->sptm, "error opening SPTM");
+         info->txm_f = check_and_open(info->txm, "error opening TXM");
+@@ -255,8 +1190,38 @@ static void darwin_init(MachineState *ms) {
+     info->dram_base = *(u64*)adt_get_prop_val(chosen_node, "dram-base");
+     info->dram_size = *(u64*)adt_get_prop_val(chosen_node, "dram-size");
+ 
++    const char *dcpfw = getenv("DARWIN_DCPFW");
++    if (dcpfw) {
++        info->dcpfw = g_strdup(dcpfw);
++        info->dcpfw_f = check_and_open(info->dcpfw, "error opening DCP firmware");
++        uint64_t want = ROUND_NEXT_PAGE(info->dcpfw_f.len) + (64 * ONE_MB);
++        info->dcpfw_region = ROUND_UP_POW2(want, DARWIN_HUGE_PAGE_SIZE);
++    }
++
++    const char *ansfw = getenv("DARWIN_ANSFW");
++    if (ansfw) {
++        info->ansfw = g_strdup(ansfw);
++        info->ansfw_f = check_and_open(info->ansfw, "error opening ANS firmware");
++        // Give the coprocessor room beyond the image itself for its working set.
++        uint64_t want = ROUND_NEXT_PAGE(info->ansfw_f.len) + (64 * ONE_MB);
++        info->ansfw_region = ROUND_UP_POW2(want, DARWIN_HUGE_PAGE_SIZE);
++    }
++
++    // Boot framebuffer is opt-in while it is being brought up: DARWIN_FB=1
++    // enables the carve + boot_args.Video, DARWIN_FB=carve reserves the pixels
++    // but leaves Video zeroed, which isolates the memory layout from the
++    // display handoff when something regresses.
++    const char *fb_mode = getenv("DARWIN_FB");
++    if (fb_mode) {
++        info->fb_width  = DARWIN_FB_WIDTH;
++        info->fb_height = DARWIN_FB_HEIGHT;
++        info->fb_size   = ROUND_NEXT_PAGE((uint64_t)info->fb_width * info->fb_height * 4);
++        info->fb_video  = (0 != strcmp(fb_mode, "carve"));
++    }
++
+     s->cpu = ARM_CPU(cpuobj);
+     arm_load_xnu(s->cpu, ms, info);
++    init_framebuffer(info);
+     if (info->has_mte) setup_mte(cpuobj, MACHINE(s), info);
+ 
+     struct dtree_node *amcc_node = adt_find_node(dt_root, "chosen/lock-regs/amcc");
+@@ -272,7 +1237,29 @@ static void darwin_init(MachineState *ms) {
+     assert(0 == arm_io_ranges[0]); // child bus phys addr must be zero
+ 
+     init_uart(dt_root, iobase);
+-    init_aic(dt_root, iobase);
++    if (getenv("DARWIN_AIC")) init_aic_real(dt_root, iobase, cpu);
++    else                      init_aic(dt_root, iobase);
++    // Catch-all MMIO logger under everything else. Without this we only ever
++    // see accesses to regions we already model, which makes "no accesses" an
++    // ambiguous result: it cannot distinguish a driver that never runs from one
++    // touching registers we forgot to map.
++    if (getenv("DARWIN_TRACEIO")) {
++        uint64_t *r = adt_get_prop_val(arm_io, "ranges");
++        size_t rl = adt_get_prop_len(arm_io, "ranges");
++        if (r && rl >= 24) {
++            create_unimplemented_device("arm-io-catchall", r[1], r[2]);
++            printf("[traceio] catch-all 0x%llX + 0x%llX\n",
++                   (unsigned long long)r[1], (unsigned long long)r[2]);
++            fflush(stdout);
++        }
++    }
++
++    if (getenv("DARWIN_PMGR")) init_pmgr(dt_root, iobase);
++    if (getenv("DARWIN_DART")) init_darts(dt_root, iobase);
++    if (getenv("DARWIN_RTKIT_ANS")) init_rtkit_ans(dt_root, iobase, info);
++    else if (getenv("DARWIN_RTKIT")) init_rtkit_dcp(dt_root, iobase, info);
++    else if (getenv("DARWIN_ASC")) init_asc_mailbox(dt_root, iobase);
++    if (getenv("DARWIN_DISP")) init_display_stub(dt_root, iobase);
+     init_sep(dt_root);
+     init_cpu_impl(dt_root);
+ 
+@@ -311,6 +1298,7 @@ static void darwin_machine_class_init(ObjectClass *oc, const void *data) {
+     object_class_property_add_str(oc, "dtree", dtree_darwin_class_get, dtree_darwin_class_set);
+     object_class_property_add_str(oc, "sptm", sptm_darwin_class_get, sptm_darwin_class_set);
+     object_class_property_add_str(oc, "txm", txm_darwin_class_get, txm_darwin_class_set);
++    object_class_property_add_str(oc, "cl4", cl4_darwin_class_get, cl4_darwin_class_set);
+     object_class_property_add_str(oc, "tc", tc_darwin_class_get, tc_darwin_class_set);
+     object_class_property_add_str(oc, "ramdisk", ramdisk_darwin_class_get, ramdisk_darwin_class_set);
+ 
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index 2a21540..0df6777 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -114,7 +114,7 @@ arm_common_ss.add(files('boot.c'))
+ 
+ hw_common_arch += {'arm': arm_common_ss}
+ 
+-arm_common_ss.add(files('darwin.c', 'xnuboot_sptm.c', 'xnu_patch.c', 'apple_regs.c', 'apple_dtree.c', 'apple_amcc.c', 'macho.c'))
++arm_common_ss.add(files('darwin.c', 'xnuboot_sptm.c', 'xnu_patch.c', 'apple_regs.c', 'apple_dtree.c', 'apple_amcc.c', 'macho.c', 'apple_rtkit.c', 'apple_dcp.c'))
+ 
+ arm_common_ss.add(custom_target('apple_regs_autogen.h',
+   output: 'apple_regs_autogen.h',
+diff --git a/hw/arm/xnuboot_sptm.c b/hw/arm/xnuboot_sptm.c
+index b96d421..21a906b 100644
+--- a/hw/arm/xnuboot_sptm.c
++++ b/hw/arm/xnuboot_sptm.c
+@@ -86,6 +86,62 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
+     return 0;
+ }
+ 
++
++// Apply CL4's DYLD chained fixups to its __DATA (component 'tadk'), rebasing
++// each pointer to the physical address where its target segment was loaded.
++// CL4 runs MMU-off at load, and __TEXT/__DATA are non-contiguous in physical
++// (phase1/phase2 split), so rebase per-segment. ptr_format 12
++// (ARM64E_USERLAND24): target field = offset from the 0xc0000000 image base.
++static void apply_cl4_fixups(u8 *macho, hwaddr rx_phys, hwaddr rw_phys,
++                             hwaddr le_phys) {
++    sect_t *cf = macho_find_sect(macho, "__TEXT", "__chain_fixups");
++    if (!cf || !cf->size) { printf("[cl4] no __chain_fixups\n"); return; }
++    u8 *fx = macho + cf->offset;
++    u32 starts_offset = *(u32*)(fx + 4);
++    u8 *si = fx + starts_offset;
++    u32 seg_count = *(u32*)si;
++    u32 *seg_offs = (u32*)(si + 4);
++    u32 applied = 0;
++    for (u32 sg = 0; sg < seg_count; sg++) {
++        if (!seg_offs[sg]) continue;
++        u8 *seg = si + seg_offs[sg];
++        u16 page_size = *(u16*)(seg + 4);
++        u64 seg_off   = *(u64*)(seg + 8);   // vmaddr-relative segment base
++        u16 page_count = *(u16*)(seg + 20);
++        u16 *page_start = (u16*)(seg + 22);
++        // Only the __DATA segment (seg_off 0x68c000) carries our chains.
++        if (seg_off != 0x68c000) continue;
++        for (u16 pi = 0; pi < page_count; pi++) {
++            if (page_start[pi] == 0xFFFF) continue;
++            u64 off = (u64)pi * page_size + page_start[pi];
++            for (;;) {
++                hwaddr slot = rw_phys + off;   // __DATA content base = rw_phys
++                u64 raw = 0;
++                address_space_read(&address_space_memory, slot,
++                                   MEMTXATTRS_UNSPECIFIED, &raw, 8);
++                u32 next = (raw >> 51) & 0x7ff;
++                bool auth = (raw >> 63) & 1;
++                u64 target = auth ? (raw & 0xffffffffULL)
++                                  : (raw & 0x7ffffffffffULL);
++                hwaddr nv;
++                if (target < 0x68c000)       nv = rx_phys + target;
++                else if (target < 0x6d4000)  nv = rw_phys + (target - 0x68c000);
++                else                         nv = le_phys + (target - 0x6d4000);
++                address_space_write(&address_space_memory, slot,
++                                    MEMTXATTRS_UNSPECIFIED, &nv, 8);
++                applied++;
++                if (!next) break;
++                off += (u64)next * 8;
++            }
++        }
++    }
++    printf("[cl4] applied %u chained fixups to __DATA "
++           "(rx 0x%llX rw 0x%llX le 0x%llX)\n", applied,
++           (unsigned long long)rx_phys, (unsigned long long)rw_phys,
++           (unsigned long long)le_phys);
++    fflush(stdout);
++}
++
+ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_info *info) {
+     u8 *dtree = (u8*)info->dtree_f.buf;
+     u8 *macho_sptm = (u8*)info->sptm_f.buf;
+@@ -97,11 +153,19 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+     macho_info_t bkc_mi  = macho_get_info(macho_bkc);
+     macho_info_t txm_mi  = macho_get_info(macho_txm);
+     macho_info_t sptm_mi = macho_get_info(macho_sptm);
++    bool have_cl4 = (info->cl4_f.buf != NULL);
++    macho_info_t cl4_mi;
++    hwaddr cl4_rx_phys = 0, cl4_rw_phys = 0, cl4_le_phys = 0;
++    if (have_cl4) {
++        macho_verify_header((u8*)info->cl4_f.buf, false);
++        cl4_mi = macho_get_info((u8*)info->cl4_f.buf);
++    }
+ 
+     hwaddr args_base_phys  = 0;
+     hwaddr dtree_base_phys = 0;
+     hwaddr tc_base_phys = 0;
+     hwaddr rd_base_phys = 0;
++    hwaddr fb_base_phys = 0;
+ 
+     hwaddr tc_size_rounded = ROUND_NEXT_PAGE(sizeof(trust_cache_offsets_t) + info->tc_f.len);
+     hwaddr dtree_size_rounded = ROUND_NEXT_PAGE(info->dtree_f.len);
+@@ -173,6 +237,7 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+         SEGLEN(bkc, "__DATA_SPTM") +
+         dtree_size_rounded +
+         tc_size_rounded +
++        (have_cl4 ? (cl4_mi.virthi - cl4_mi.virtlo) : 0) +
+         DARWIN_PAGE_SIZE; // extra page we skip in front of the device tree
+ 
+     assert(GET_L2_PT_INDEX(bkc_mi.virtlo) > bytes_before_sptm);
+@@ -238,7 +303,18 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+         END_ENTRY("BootKC-rs");
+     }
+ 
+-    // CL4-rx, CL4-ro (ignored)
++    // CL4 secure kernel (exclavecore 'txtk'), phase 1: code only. SPTM's
++    // validate_region_order requires DeviceTree to immediately follow CL4-ro,
++    // so only __TEXT (+ empty CL4-ro) may live here; __DATA/__LINKEDIT go in
++    // phase 2 after BootKC-le.
++    if (have_cl4) {
++        cl4_rx_phys = blob_head;
++        PUSH_SEG(cl4, "__TEXT");
++        END_ENTRY("CL4-rx");
++        set_adt_mmap(map, "CL4-ro", blob_head, 0);   // empty; keeps ordering
++        set_adt_mmap(map, "CL4-virt", cl4_mi.virtlo, 0);
++        set_adt_mmap(map, "CL4-entry", cl4_mi.entrypoint, 0);
++    }
+ 
+     // DeviceTree
+     {
+@@ -316,6 +392,23 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+     {
+         PUSH_SEG(bkc, "__LINKEDIT");
+         END_ENTRY("BootKC-le");
++
++    // CL4-rw, CL4-le (phase 2): __DATA/__LINKEDIT after BootKC-le, then rebase.
++    if (have_cl4) {
++        cl4_rw_phys = blob_head;
++        PUSH_SEG(cl4, "__DATA");
++        END_ENTRY("CL4-rw");
++        cl4_le_phys = blob_head;
++        PUSH_SEG(cl4, "__LINKEDIT");
++        END_ENTRY("CL4-le");
++        apply_cl4_fixups((u8*)info->cl4_f.buf, cl4_rx_phys, cl4_rw_phys,
++                         cl4_le_phys);
++        printf("[cl4] rx 0x%llX rw 0x%llX le 0x%llX virt 0x%llX entry 0x%llX\n",
++               (unsigned long long)cl4_rx_phys, (unsigned long long)cl4_rw_phys,
++               (unsigned long long)cl4_le_phys, (unsigned long long)cl4_mi.virtlo,
++               (unsigned long long)cl4_mi.entrypoint);
++        fflush(stdout);
++    }
+     }
+ 
+     // CL4-dummypage
+@@ -338,6 +431,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+         blob_head += info->ramdisk_f.len;
+         blob_head = ROUND_NEXT_PAGE(blob_head);
+         END_ENTRY("RAMDisk");
++        printf("[darwin] ramdisk: %llu bytes (0x%llX) at 0x%llX\n",
++               (unsigned long long)info->ramdisk_f.len,
++               (unsigned long long)info->ramdisk_f.len,
++               (unsigned long long)rd_base_phys);
++        fflush(stdout);
+     }
+ 
+ #undef PUSH_SEG
+@@ -380,11 +478,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+     } else {
+         args.memSize = info->dram_size;
+     }
++    // Park the boot framebuffer at the very top of DRAM and hide it from the
++    // kernel by shrinking memSize, which is what iBoot does. Carving it out of
++    // the boot blob instead would land it inside the contiguous region chain
++    // SPTM validates, and the guest hangs before it can print anything.
++    if (info->fb_size) {
++        args.memSize = ROUND_DOWN_POW2(args.memSize - info->fb_size, DARWIN_PAGE_SIZE);
++        fb_base_phys = info->dram_base + args.memSize;
++        info->fb_base = fb_base_phys;
++    }
++
++    // ANS coprocessor carve-out, same trick as the framebuffer: take it off the
++    // top of DRAM and hide it behind memSize so XNU never hands it out.
++    if (info->ansfw_f.buf) {
++        uint64_t region = info->ansfw_region;
++        args.memSize = ROUND_DOWN_POW2(args.memSize - region, DARWIN_PAGE_SIZE);
++        hwaddr fw_base = info->dram_base + args.memSize;
++
++        address_space_write(&address_space_memory, fw_base, MEMTXATTRS_UNSPECIFIED,
++                            info->ansfw_f.buf, info->ansfw_f.len);
++
++        struct dtree_node *nub =
++            adt_find_node((struct dtree_node*)dtree, "arm-io/ans/iop-ans-nub");
++        if (nub) {
++            u64 *rb = adt_get_prop_val(nub, "region-base");
++            u64 *rs = adt_get_prop_val(nub, "region-size");
++            if (rb) *rb = fw_base;
++            if (rs) *rs = region;
++            printf("[darwin] ans firmware: %llu bytes at 0x%llX, region 0x%llX\n",
++                   (unsigned long long)info->ansfw_f.len,
++                   (unsigned long long)fw_base,
++                   (unsigned long long)region);
++        } else {
++            printf("[darwin] ans firmware loaded but iop-ans-nub not in dtree\n");
++        }
++        fflush(stdout);
++    }
++
++    if (info->dcpfw_f.buf) {
++        uint64_t region = info->dcpfw_region;
++        args.memSize = ROUND_DOWN_POW2(args.memSize - region, DARWIN_PAGE_SIZE);
++        hwaddr fw_base = info->dram_base + args.memSize;
++
++        address_space_write(&address_space_memory, fw_base, MEMTXATTRS_UNSPECIFIED,
++                            info->dcpfw_f.buf, info->dcpfw_f.len);
++
++        struct dtree_node *nub =
++            adt_find_node((struct dtree_node*)dtree, "arm-io/dcp/iop-dcp-nub");
++        u64 *rb = nub ? adt_get_prop_val(nub, "region-base") : NULL;
++        u64 *rs = nub ? adt_get_prop_val(nub, "region-size") : NULL;
++        if (rb && rs) {
++            *rb = fw_base; *rs = region;
++            printf("[darwin] dcp firmware: %llu bytes at 0x%llX, region 0x%llX\n",
++                   (unsigned long long)info->dcpfw_f.len,
++                   (unsigned long long)fw_base, (unsigned long long)region);
++        } else {
++            printf("[darwin] dcp firmware loaded but iop-dcp-nub has no "
++                   "region-base/region-size (use DCP_REGION=1 in dt_fixup)\n");
++        }
++        fflush(stdout);
++    }
++
+     args.topOfKernelData = blob_head;
+     args.deviceTreeP = dtree_base_phys - args.physBase + args.virtBase;
+     args.deviceTreeLength = info->dtree_f.len;
+     g_strlcpy(args.CommandLine, info->args, BOOT_LINE_LENGTH);
+ 
++    // Hand XNU the boot display. With v_baseAddr set, PE_init_platform wires
++    // up the graphics console instead of falling back to serial only.
++    // Publish the framebuffer the way iBoot does. boot_args.Video alone isn't
++    // enough on modern iOS: the /vram node is what the IODeviceTree platform
++    // expert reads, and display-scale is left at 0 by the stock tree, which is
++    // not a value the display path expects.
++    if (info->fb_size && info->fb_video) {
++        struct dtree_node *vram_node = adt_find_node((struct dtree_node*)dtree, "vram");
++        if (vram_node) {
++            u64 *vram_reg = adt_get_prop_val(vram_node, "reg");
++            if (vram_reg) {
++                vram_reg[0] = fb_base_phys;
++                vram_reg[1] = info->fb_size;
++                printf("[darwin] /vram reg = 0x%llX (0x%llX)\n",
++                       (unsigned long long)vram_reg[0], (unsigned long long)vram_reg[1]);
++            }
++        }
++        struct dtree_node *chosen = adt_find_node((struct dtree_node*)dtree, "chosen");
++        if (chosen) {
++            u32 *scale = adt_get_prop_val(chosen, "display-scale");
++            if (scale && *scale == 0) *scale = 1;
++        }
++        fflush(stdout);
++    }
++
++    if (info->fb_size && info->fb_video) {
++        args.Video.v_baseAddr = fb_base_phys;
++        args.Video.v_display  = 1;
++        args.Video.v_rowBytes = info->fb_width * 4;
++        args.Video.v_width    = info->fb_width;
++        args.Video.v_height   = info->fb_height;
++        args.Video.v_depth    = 32 | (1 << kBootVideoDepthScaleShift);
++    }
++
++    // Always report where SPTM will actually land things. A sampled runtime PC
++    // is meaningless against the on-disk kernelcache without this slide.
++    {
++        uint64_t sptm_rt = args.virtBase - args.physBase + sptm_mi.physlo;
++        uint64_t bkc_rt  = sptm_rt + 2 * SPTM_EXPECTED_STRIDE;
++        printf("[darwin] bkc static virtlo = 0x%llX\n",
++               (unsigned long long)bkc_mi.virtlo);
++        printf("[darwin] bkc runtime base  = 0x%llX\n",
++               (unsigned long long)bkc_rt);
++        printf("[darwin] bkc slide         = 0x%llX  (runtime - static)\n",
++               (unsigned long long)(bkc_rt - bkc_mi.virtlo));
++        fflush(stdout);
++    }
++
+ #ifdef DEBUG_MEMORY_LAYOUT
+     uint64_t sptm_load = args.virtBase - args.physBase + sptm_mi.physlo;
+     uint64_t txm_load = sptm_load + 1 * SPTM_EXPECTED_STRIDE;
+diff --git a/include/xnu/boot/xnuboot.h b/include/xnu/boot/xnuboot.h
+index 2c4c01e..b689d6c 100644
+--- a/include/xnu/boot/xnuboot.h
++++ b/include/xnu/boot/xnuboot.h
+@@ -46,6 +46,29 @@ struct xnu_boot_info {
+     uint64_t dram_base, dram_size;
+     bool has_mte;
+ 
++    // Boot framebuffer. The machine picks the geometry; the kernel loader
++    // carves the pixels out of DRAM and reports the address back here.
++    uint32_t fb_width, fb_height;
++    hwaddr   fb_base;
++    uint64_t fb_size;
++    bool     fb_video;   // hand the framebuffer to XNU via boot_args.Video
++
++    // ANS coprocessor firmware. iBoot loads this into a carve-out and
++    // publishes it through iop-ans-nub's region-base/region-size, which the
++    // stock tree leaves at zero.
++    char       *ansfw;
++    mmap_file_t ansfw_f;
++    uint64_t    ansfw_region;
++    char       *dcpfw;
++    mmap_file_t dcpfw_f;
++    uint64_t    dcpfw_region;
++
++    // CL4 secure kernel (exclavecore 'txtk'). darwin-vm normally stubs the
++    // SK domain (see 'CL4-rx, CL4-ro (ignored)' in xnuboot_sptm.c); this loads
++    // it so SPTM's EVENT_BOOTSTRAP_SK can launch the secure kernel.
++    char       *cl4;
++    mmap_file_t cl4_f;
++
+     // Feedback from the kernel loader back to the darwin machine to boot during reset
+     hwaddr  init_pc, init_x0;
+ };
+diff --git a/qemu-options.hx b/qemu-options.hx
+index d9efe9e..3d3b4e2 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -6682,6 +6682,9 @@ DEF("sptm", HAS_ARG, QEMU_OPTION_sptm, \
+ DEF("txm", HAS_ARG, QEMU_OPTION_txm, \
+            "-txm file    use 'file' as the TXM firmware\n", QEMU_ARCH_ALL)
+ 
++DEF("cl4", HAS_ARG, QEMU_OPTION_cl4, \
++           "-cl4 file    use 'file' as the CL4 secure kernel (exclavecore)\n", QEMU_ARCH_ALL)
++
+ DEF("tc", HAS_ARG, QEMU_OPTION_tc, \
+            "-tc file    use 'file' as the trustcache \n", QEMU_ARCH_ALL)
+ 
+diff --git a/system/vl.c b/system/vl.c
+index 5bc400c..14c18c8 100644
+--- a/system/vl.c
++++ b/system/vl.c
+@@ -3040,6 +3040,9 @@ void qemu_init(int argc, char **argv)
+             case QEMU_OPTION_txm:
+                 qdict_put_str(machine_opts_dict, "txm", optarg);
+                 break;
++            case QEMU_OPTION_cl4:
++                qdict_put_str(machine_opts_dict, "cl4", optarg);
++                break;
+             case QEMU_OPTION_tc:
+                 qdict_put_str(machine_opts_dict, "tc", optarg);
+                 break;
+diff --git a/target/arm/helper.c b/target/arm/helper.c
+index dc9f79a..11166f4 100644
+--- a/target/arm/helper.c
++++ b/target/arm/helper.c
+@@ -10100,6 +10100,18 @@ int fp_exception_el(CPUARMState *env, int cur_el)
+ #ifndef CONFIG_USER_ONLY
+     uint64_t hcr_el2;
+ 
++    /*
++     * Apple GXF: the guarded execution domain (SPTM/TXM and the SK / exclave
++     * kernel "CL4") is handed an FP-enabled context by hardware. This model
++     * does not bank CPACR_EL1 across GXF and the SK genters before XNU has
++     * programmed CPACR, so honouring CPACR here would spuriously trap the
++     * guarded kernel's first Advanced-SIMD instruction (ESR EC 0x07). While a
++     * guarded domain is active, FP/SIMD is always accessible.
++     */
++    if (env->currentg) {
++        return 0;
++    }
++
+     /*
+      * CPACR and the CPTR registers don't exist before v6, so FP is
+      * always accessible
+diff --git a/target/arm/ptw.c b/target/arm/ptw.c
+index 699da26..8f023d1 100644
+--- a/target/arm/ptw.c
++++ b/target/arm/ptw.c
+@@ -3733,7 +3733,16 @@ static bool get_phys_addr_disabled(CPUARMState *env,
+         /* Fill in cacheattr a-la AArch64.TranslateAddressS1Off. */
+         if (r_el == 1) {
+             uint64_t hcr = arm_hcr_el2_eff_secstate(env, ptw->in_space);
+-            if (hcr & HCR_DC) {
++            /*
++             * Apple GXF: the guarded domain (SK / exclave kernel "CL4") runs
++             * its early boot with the MMU disabled but expects Normal memory
++             * semantics (its startup memcpy/memset use unaligned Advanced-SIMD
++             * accesses that are illegal against Device-nGnRnE memory). Real HW
++             * provides this via HCR_EL2.DC-style default-cacheable behaviour
++             * for the secure world; mirror it by treating MMU-off guarded data
++             * accesses as Normal Write-Back.
++             */
++            if ((hcr & HCR_DC) || env->currentg) {
+                 if (hcr & HCR_DCT) {
+                     memattr = 0xf0;  /* Tagged, Normal, WB, RWA */
+                 } else {
+diff --git a/target/arm/tcg/hflags.c b/target/arm/tcg/hflags.c
+index 0716ca9..6eeb910 100644
+--- a/target/arm/tcg/hflags.c
++++ b/target/arm/tcg/hflags.c
+@@ -39,6 +39,18 @@ static bool aprofile_require_alignment(CPUARMState *env, int el, uint64_t sctlr)
+         return true;
+     }
+ 
++    /*
++     * Apple GXF: the guarded domain (SK / exclave kernel "CL4") runs early
++     * boot with the MMU off but is given Normal (not Device) memory by the
++     * secure world, so its unaligned Advanced-SIMD startup code is legal.
++     * get_phys_addr_disabled() already returns Normal WB for guarded MMU-off
++     * accesses; match that here so the translator does not bake in an
++     * alignment requirement (unless the guarded kernel itself sets SCTLR.A).
++     */
++    if (env->currentg) {
++        return false;
++    }
++
+     /*
+      * With PMSA, when the MPU is disabled, all memory types in the
+      * default map are Normal, so don't need aligment enforcing.

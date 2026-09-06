@@ -1,0 +1,4 @@
+Upstream base repo : jprx/darwin-vm  -> its qemu-sptm submodule/fork
+qemu-sptm base HEAD: 6c3ca665bab9a08399f4681e4ada43bfcfb7d493
+                     ("fix(sprr): read sprr index bits directly from page table descriptor")
+Apply with: cd qemu-sptm && git apply /path/to/qemu-sptm-cl4-all.patch

@@ -1,0 +1,27 @@
+# NEVER commit firmware, keys or decrypted images (ChefKiss "Danger" notice)
+firmware/
+*.im4p
+*.img4
+*.im4m
+*.dmg
+*.dmg.aea
+*.aea
+*.tc
+ramdisk*
+exclavecore*
+cl4_full
+bootkc*
+sptm
+txm
+dtree*
+*.bin
+keys.txt
+*.key
+*.iv
+# build / scratch
+build/
+*.o
+*.log
+__pycache__/
+*.pyc
+.DS_Store

@@ -377,3 +377,44 @@ NEXT if continuing (A): trace 0x10006924e58 (the (table,2,5) lookup) to learn th
 layout it needs, and what registers domain 0xC00000001's descriptor. Also re-check
 whether 0xC00000001 is the RIGHT domain for this context or if the descriptor needs more
 fields than {id}.
+
+## UPDATE 8 — CL4 boot is an ordered chain; the blocker is the SPTM->SK handoff
+Probing further (0x10006924e58) shows a lazy singleton factory 0x10006925e70(2,5)
+returning NULL -> another uninitialised global. This is not one missing value but a
+CHAIN: CL4 init runs in order and each stage seeds the next.
+
+CL4 Mach-O sections (otool -l firmware/cl4_full) reveal the structure:
+  __TEXT,__constructor / __init_offsets ; __DATA,__mod_init_func @0xc0698fc0
+     -> C++ static constructors that populate the registries/tables we see as null.
+  __TEXT,__ENDPOINTS      -> CL4's endpoint table. THIS is where SecureRTBuddyDCP (our
+     end goal) is defined/published.
+  __TEXT,__DEVICETREE     -> CL4 carries its OWN device tree.
+  plenty of __swift5_* -> parts of CL4 are Swift.
+Boot order (inferred): entry -> early init -> DOMAIN SETUP (needs the SPTM->SK handoff)
+-> __mod_init_func constructors -> registries populated -> __ENDPOINTS published (incl.
+SecureRTBuddyDCP) -> Tightbeam IPC ready -> XNU's RTBuddy(DCP) route resolves -> DCP ->
+IOMobileFramebuffer -> pixels. We are stuck at DOMAIN SETUP; constructors have not run
+yet, which is why so many globals are still zero. Synthesizing each null (path A) fights
+symptoms; the root cause is the incomplete handoff.
+
+### Device-tree check (path B) result
+The device tree (dtree_dbg) DOES carry exclave config: DCP-EXCLAVE, dcp-exclave-mailbox,
+com.apple.service.ExclaveDriverKit / ExclaveSEPManager / ANEExclave, __ENDPOINTS-style
+services. BUT its "domain-id" properties are PCIe/clock/perf domains, NOT the SPTM
+security domains (0xc0000000N). So the SK security-domain descriptors are SPTM-internal,
+not sourced from the device tree in an obvious way. SPTM passes x1=0 to CL4 because our
+synthesized boot does not give SPTM whatever it needs to build the real SK handoff.
+
+### Recommended next investment (pick one)
+  B1. Reverse the SPTM binary's SK bootstrap (firmware/sptm): find where it builds the
+      CL4 genter register state (x0=boot handoff, x1=?) and why x1=0. SPTM string
+      "region '%s' ... not immediately after ..." already located the region-order loop;
+      similarly search SPTM for the SK-handoff builder. This yields the ONE correct
+      structure that satisfies the whole chain.
+  A2. Keep the x1 probe and iteratively synthesize: give the domain descriptor more
+      fields, seed the (2,5) registry, etc. Faster to see motion, but open-ended.
+  C.  Bypass CL4: emulate SecureRTBuddyDCP in QEMU (apple_rtkit.c/apple_dcp.c) so XNU's
+      AppleDCPLinkServiceSoC attaches without the real secure kernel. Independent of the
+      whole CL4 handoff problem; different (also deep) work.
+The x1-injection probe (UPDATE 7) is left in place behind g_cl4_entry_pc; it is
+experimental scaffolding, not a fix — remove or gate before any real integration.

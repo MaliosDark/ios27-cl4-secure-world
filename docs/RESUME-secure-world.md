@@ -780,3 +780,11 @@ issue -- DARWIN_NOPAC=1 strips auth and it still crashes), because its secure-wo
 service objects are absent. So the graphical iOS UI (SpringBoard) needs the full OS (not
 ramdisk) + AppleDCP/IOMFB init completing -- the large remaining effort. What the panel
 shows now is the real iOS boot, graphically, driven end-to-end by our emulated DCP.
+
+## UPDATE 21 — Panel polish: panic state + vignette
+apple_dcp.c boot screen now reflects the real boot outcome: boot_check_stage sets
+boot_panic on "panic("/"Panicked" -> the progress ring turns red, center shows "!",
+label "KERNEL PANIC -- ver consola". Added a soft edge vignette so the panel reads like
+glass. Normal boot (dtree_dbg) shows the green ring at 100% "iOS en marcha" with the real
+libignition/launchd sequence (hello from launchd.1, ignition sequence complete).
+shots/panel-boot-polished.png.

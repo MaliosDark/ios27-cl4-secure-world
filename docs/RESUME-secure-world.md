@@ -804,3 +804,13 @@ shell/getty on the console, so there is nothing guest-side to echo/receive input
 interactive shell needs the full OS (or a shell-enabled boot), same limitation as the
 graphical UI. The panel is now interactive-CAPABLE end-to-end; it becomes usable the
 moment the guest presents a console.
+
+## UPDATE 23 — Full-OS boot path wired to the lit panel + keyboard
+run_rootfs.sh now boots the full iOS rootfs WITH our panel: DARWIN_RTKIT=1 (emulated DCP)
++ DARWIN_FB=1 (framebuffer + on-panel keyboard) alongside DARWIN_AIC/DART/DISP, -serial
+mon:stdio, no -display none (a QEMU window opens). Drop a decrypted rootfs .dmg (>1G) in
+darwin-vm/rootfs/ (or set ROOTFS=) and run it -> full OS boots with the lit iPhone panel
+and keyboard->guest wired. Two entry points: ver_pantalla.sh (restore ramdisk, what we
+demo now) and run_rootfs.sh (full OS, needs the user's rootfs -- ChefKiss: firmware
+acquisition/decryption is the user's, not automated). Everything except the rootfs itself
+is plug-and-play: panel scanout, boot screen, keyboard, DCP mailbox.

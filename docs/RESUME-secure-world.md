@@ -855,3 +855,24 @@ NEXT (agent Steps 2-4): symbolicate crash A in the AppleDCP kext, find the secur
 firmware branch, flip it via DT or a minimal branch-gate patch so AppleDCP populates its
 handler table and writes CPU_CONTROL RUN -> "[dcp] AFK INIT" against apple_dcp -> then
 decode the IOMFB surface (agent Step 6) and blit the guest's real surface to fb_base.
+
+## UPDATE 27 — FULL iOS rootfs boots to APFS mountroot (dram-size fix); md0 >4GB blocker
+The user has the decrypted full rootfs: rootfs/24A5430a__iPhone17,3/decrypted/
+094-13182-141.dmg (9.3 GB APFS, UDRW). Booting it as the ramdisk (rd=md0):
+- FIRST bug: SPTM data-aborted in EL2 (FAR 0xfffffff25d170000) with 0 serial, because the
+  device tree declared dram-size = 8GB (dt_fixup DRAM_SIZE default 0x200000000) but the
+  rootfs is 9.3GB -> doesn't fit -> SPTM fault. FIX: firmware/dtree_ios = dtree_dbg with
+  /chosen dram-size = 0x500000000 (20GB) + the pram props; boot with -m 20G. run_rootfs.sh
+  updated to use dtree_ios. -> XNU now boots and reaches APFS mountroot (180+ serial lines).
+- SECOND blocker (current): "md0 superblock container size 10026483712 greater than device
+  size 1436549120 ... Container corruption ... mountroot failed error 92". 1436549120 =
+  9.3GB & 0xFFFFFFFF -> XNU sees the md0 ramdisk as 1.36GB (a 32-bit BYTE truncation of the
+  9.3GB size). Our side is all 64-bit correct (memory-map RAMDisk entry is 16 bytes u64
+  addr+u64 size via set_adt_mmap; boot_args.memSize is uint64_t; the ramdisk is copied with
+  a u64 length; loader prints the full 10026483712). So XNU's md0 (memory-disk from the DT
+  RAMDisk region) reads the size as 32-bit -> ramdisks >4GB truncate. NEXT: find how XNU
+  sizes md0 (bsd/dev/memdev mdevadd / the RAMDisk memory-map read) and pass a 64-bit size,
+  or present the rootfs via a real block device (darwin-vm has none today), or use a <4GB
+  rootfs. This is the last blocker to a full-OS boot.
+Progress: full iOS now boots through SPTM/XNU to APFS mountroot on the lit panel; only the
+>4GB md0 ramdisk size stops the root mount.

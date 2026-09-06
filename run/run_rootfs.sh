@@ -21,7 +21,7 @@ if [[ -z "$ROOTFS" ]]; then
 fi
 [[ -n "$ROOTFS" && -f "$ROOTFS" ]] || { echo "no root filesystem image found; set ROOTFS=" >&2; exit 1; }
 
-MEM="${MEM:-20G}"
+MEM="${MEM:-20G}"   # dtree_ios declara dram-size=20GB (el rootfs no entra en 8GB)
 echo "rootfs : $ROOTFS ($(du -h "$ROOTFS" | cut -f1))"
 echo "memory : $MEM"
 
@@ -31,7 +31,7 @@ trap fix_tty EXIT
 DARWIN_AIC=1 DARWIN_DART=1 DARWIN_DISP=all DARWIN_RTKIT=1 DARWIN_FB=1 \
 "$Q" -M darwin \
     -bootkc  "$FW/bootkc" \
-    -dtree   "${DTREE:-$FW/dtree_full}" \
+    -dtree   "${DTREE:-$FW/dtree_ios}" \
     -tc      "$FW/ramdisk.tc" \
     -ramdisk "$ROOTFS" \
     -sptm    "$FW/sptm" \

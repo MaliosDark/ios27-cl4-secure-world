@@ -1118,10 +1118,10 @@ index 2a21540..0df6777 100644
  arm_common_ss.add(custom_target('apple_regs_autogen.h',
    output: 'apple_regs_autogen.h',
 diff --git a/hw/arm/xnuboot_sptm.c b/hw/arm/xnuboot_sptm.c
-index b96d421..c876afe 100644
+index b96d421..9e76f43 100644
 --- a/hw/arm/xnuboot_sptm.c
 +++ b/hw/arm/xnuboot_sptm.c
-@@ -86,6 +86,62 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
+@@ -86,6 +86,73 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
      return 0;
  }
  
@@ -1131,6 +1131,17 @@ index b96d421..c876afe 100644
 +// CL4 runs MMU-off at load, and __TEXT/__DATA are non-contiguous in physical
 +// (phase1/phase2 split), so rebase per-segment. ptr_format 12
 +// (ARM64E_USERLAND24): target field = offset from the 0xc0000000 image base.
++/*
++ * EXPERIMENTAL PROBE (not a real fix): SPTM hands the SK/CL4 genter x1=0 in our
++ * synthesized boot, so CL4's boot-info tag3 (a pointer to a domain descriptor) is
++ * null and CL4 faults dereferencing it. To learn the next layer we synthesize a
++ * minimal domain descriptor {domain_id, 0...} and inject x1 -> &descriptor at the
++ * exact ERET into CL4's entrypoint (see target/arm/tcg/helper-a64.c). The domain
++ * id defaults to 0xc00000001 and can be overridden with $CL4_DOMAIN_ID.
++ */
++uint64_t g_cl4_entry_pc = 0;
++uint64_t g_cl4_x1_inject = 0;
++
 +static void apply_cl4_fixups(u8 *macho, hwaddr rx_phys, hwaddr rw_phys,
 +                             hwaddr le_phys) {
 +    sect_t *cf = macho_find_sect(macho, "__TEXT", "__chain_fixups");
@@ -1184,7 +1195,7 @@ index b96d421..c876afe 100644
  static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_info *info) {
      u8 *dtree = (u8*)info->dtree_f.buf;
      u8 *macho_sptm = (u8*)info->sptm_f.buf;
-@@ -97,11 +153,19 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -97,11 +164,19 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      macho_info_t bkc_mi  = macho_get_info(macho_bkc);
      macho_info_t txm_mi  = macho_get_info(macho_txm);
      macho_info_t sptm_mi = macho_get_info(macho_sptm);
@@ -1204,7 +1215,7 @@ index b96d421..c876afe 100644
  
      hwaddr tc_size_rounded = ROUND_NEXT_PAGE(sizeof(trust_cache_offsets_t) + info->tc_f.len);
      hwaddr dtree_size_rounded = ROUND_NEXT_PAGE(info->dtree_f.len);
-@@ -173,6 +237,7 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -173,6 +248,7 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          SEGLEN(bkc, "__DATA_SPTM") +
          dtree_size_rounded +
          tc_size_rounded +
@@ -1212,7 +1223,7 @@ index b96d421..c876afe 100644
          DARWIN_PAGE_SIZE; // extra page we skip in front of the device tree
  
      assert(GET_L2_PT_INDEX(bkc_mi.virtlo) > bytes_before_sptm);
-@@ -238,7 +303,38 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -238,7 +314,38 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          END_ENTRY("BootKC-rs");
      }
  
@@ -1252,7 +1263,7 @@ index b96d421..c876afe 100644
  
      // DeviceTree
      {
-@@ -316,6 +412,17 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -316,12 +423,38 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      {
          PUSH_SEG(bkc, "__LINKEDIT");
          END_ENTRY("BootKC-le");
@@ -1269,8 +1280,30 @@ index b96d421..c876afe 100644
 +    }
      }
  
-     // CL4-dummypage
-@@ -338,6 +445,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+-    // CL4-dummypage
++    // CL4-dummypage  (also used as the experimental probe scratch page)
+     {
++        hwaddr cl4_dummy = blob_head;
+         blob_head += DARWIN_PAGE_SIZE;
+         END_ENTRY("CL4-dummypage");
++        // EXPERIMENTAL x1-injection probe: put a minimal domain descriptor at the
++        // start of the (otherwise unused) dummy page and point CL4's tag3 at it.
++        if (have_cl4) {
++            const char *ds = getenv("CL4_DOMAIN_ID");
++            uint64_t domain_id = ds ? strtoull(ds, NULL, 0) : 0xc00000001ULL;
++            address_space_write(&address_space_memory, cl4_dummy,
++                                MEMTXATTRS_UNSPECIFIED, &domain_id, 8);
++            g_cl4_x1_inject = cl4_dummy;
++            g_cl4_entry_pc  = cl4_rx_phys + (cl4_mi.entrypoint - cl4_mi.virtlo);
++            printf("[cl4] probe: entry_pc 0x%llX x1->scratch 0x%llX domain_id 0x%llX\n",
++                   (unsigned long long)g_cl4_entry_pc, (unsigned long long)cl4_dummy,
++                   (unsigned long long)domain_id);
++            fflush(stdout);
++        }
+     }
+ 
+     // BootArgs
+@@ -338,6 +471,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          blob_head += info->ramdisk_f.len;
          blob_head = ROUND_NEXT_PAGE(blob_head);
          END_ENTRY("RAMDisk");
@@ -1282,7 +1315,7 @@ index b96d421..c876afe 100644
      }
  
  #undef PUSH_SEG
-@@ -380,11 +492,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -380,11 +518,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      } else {
          args.memSize = info->dram_size;
      }
@@ -1510,6 +1543,42 @@ index 699da26..8f023d1 100644
                  if (hcr & HCR_DCT) {
                      memattr = 0xf0;  /* Tagged, Normal, WB, RWA */
                  } else {
+diff --git a/target/arm/tcg/helper-a64.c b/target/arm/tcg/helper-a64.c
+index d8a5f2f..cee00c7 100644
+--- a/target/arm/tcg/helper-a64.c
++++ b/target/arm/tcg/helper-a64.c
+@@ -18,6 +18,9 @@
+  */
+ 
+ #include "qemu/osdep.h"
++
++extern uint64_t g_cl4_entry_pc;
++extern uint64_t g_cl4_x1_inject;
+ #include "qemu/units.h"
+ #include "cpu.h"
+ #include "gdbstub/helpers.h"
+@@ -753,6 +756,21 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
+         }
+         env->pc = new_pc;
+ 
++        /*
++         * EXPERIMENTAL PROBE (see hw/arm/xnuboot_sptm.c): SPTM ERETs into the
++         * SK/CL4 entrypoint with x1=0 in our synthesized boot, so CL4's boot-info
++         * tag3 (pointer to a domain descriptor) is null and it faults. Inject
++         * x1 -> &synthesized_descriptor at exactly this ERET so we can observe the
++         * next boot stage. Only fires for the guarded CL4 entry with x1 still 0.
++         */
++        if (g_cl4_entry_pc && new_pc == g_cl4_entry_pc &&
++            env->currentg && env->xregs[1] == 0) {
++            env->xregs[1] = g_cl4_x1_inject;
++            qemu_log_mask(CPU_LOG_INT,
++                          "[cl4] probe: injected x1=0x%" PRIx64 " at CL4 entry\n",
++                          env->xregs[1]);
++        }
++
+         qemu_log_mask(CPU_LOG_INT, "Exception return from AArch64 EL%d to "
+                       "AArch64 EL%d PC 0x%" PRIx64 "\n",
+                       cur_el, new_el, env->pc);
 diff --git a/target/arm/tcg/hflags.c b/target/arm/tcg/hflags.c
 index 0716ca9..6eeb910 100644
 --- a/target/arm/tcg/hflags.c

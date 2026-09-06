@@ -43,6 +43,42 @@ index 699da26..8f023d1 100644
                  if (hcr & HCR_DCT) {
                      memattr = 0xf0;  /* Tagged, Normal, WB, RWA */
                  } else {
+diff --git a/target/arm/tcg/helper-a64.c b/target/arm/tcg/helper-a64.c
+index d8a5f2f..cee00c7 100644
+--- a/target/arm/tcg/helper-a64.c
++++ b/target/arm/tcg/helper-a64.c
+@@ -18,6 +18,9 @@
+  */
+ 
+ #include "qemu/osdep.h"
++
++extern uint64_t g_cl4_entry_pc;
++extern uint64_t g_cl4_x1_inject;
+ #include "qemu/units.h"
+ #include "cpu.h"
+ #include "gdbstub/helpers.h"
+@@ -753,6 +756,21 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
+         }
+         env->pc = new_pc;
+ 
++        /*
++         * EXPERIMENTAL PROBE (see hw/arm/xnuboot_sptm.c): SPTM ERETs into the
++         * SK/CL4 entrypoint with x1=0 in our synthesized boot, so CL4's boot-info
++         * tag3 (pointer to a domain descriptor) is null and it faults. Inject
++         * x1 -> &synthesized_descriptor at exactly this ERET so we can observe the
++         * next boot stage. Only fires for the guarded CL4 entry with x1 still 0.
++         */
++        if (g_cl4_entry_pc && new_pc == g_cl4_entry_pc &&
++            env->currentg && env->xregs[1] == 0) {
++            env->xregs[1] = g_cl4_x1_inject;
++            qemu_log_mask(CPU_LOG_INT,
++                          "[cl4] probe: injected x1=0x%" PRIx64 " at CL4 entry\n",
++                          env->xregs[1]);
++        }
++
+         qemu_log_mask(CPU_LOG_INT, "Exception return from AArch64 EL%d to "
+                       "AArch64 EL%d PC 0x%" PRIx64 "\n",
+                       cur_el, new_el, env->pc);
 diff --git a/target/arm/tcg/hflags.c b/target/arm/tcg/hflags.c
 index 0716ca9..6eeb910 100644
 --- a/target/arm/tcg/hflags.c

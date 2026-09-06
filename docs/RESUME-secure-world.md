@@ -342,3 +342,38 @@ STATUS: CL4 boots through entry, early init, SIMD memcmp, handoff parse, and dom
 descriptor lookup; blocks on the SPTM->SK handoff missing tag1/tag3. Every fix this
 session moved CL4 strictly forward. The remaining work is reconstructing the SK
 handoff, not fighting the CPU/loader anymore.
+
+## UPDATE 7 — x1-injection PROBE works: CL4 advances past the domain deref
+Added an EXPERIMENTAL probe (NOT a real fix; clearly marked in code):
+  - hw/arm/xnuboot_sptm.c: write a minimal domain descriptor {domain_id, 0...} at
+    the start of the CL4-dummypage; export g_cl4_entry_pc (= rx_phys + (entry-virtlo)
+    = 0x1000691D4F0) and g_cl4_x1_inject (= scratch phys). domain_id defaults to
+    0xC00000001, overridable via $CL4_DOMAIN_ID.
+  - target/arm/tcg/helper-a64.c HELPER(exception_return): at the ERET whose target ==
+    g_cl4_entry_pc, in guarded state, with x1 still 0, set x1 = g_cl4_x1_inject.
+    (log: "[cl4] probe: injected x1=0x... at CL4 entry")
+RESULT: CL4 accepts domain id 0xC00000001, passes the tag3 deref + domain lookup, and
+ADVANCES. The null-deref at 0x1000691c528 is GONE. New fault one layer deeper:
+  Data Abort ESR 0x25 DFSC 0x10, FAR 0x2a0, ELR 0x1000691cd00.
+  0x1000691cce0: x0=&global 0x10006f82ce0; w1=2; w2=5; bl 0x10006924e58; ldr x0,[x0+0x2a0]
+  -> 0x10006924e58(table 0x10006f82ce0, 2, 5) returned NULL, so [0+0x2a0] faults.
+The table 0x10006f82ce0 is in __DATA bss (offset 0x6fece0, > tadk 0x48000, zero-filled)
+-> another CL4 registry/global not yet initialised. Same class of problem: CL4's init
+depends on subsystem tables that a prerequisite init step (fed by the handoff) should
+populate.
+
+### Assessment
+The probe proves the mechanism ("feed CL4 the piece it wants -> it advances"), but CL4
+init is a CHAIN of such subsystems (domain descriptor -> registry (2,5) -> ...). Fully
+synthesizing all of them by hand is open-ended. Two strategic options going forward:
+  (A) Keep synthesizing CL4's init inputs piece by piece (this path); OR
+  (B) Reverse the SPTM binary's SK bootstrap to reproduce the REAL handoff (one correct
+      structure instead of many hand-made pieces) — higher up-front cost, but then the
+      whole chain is satisfied at once; OR
+  (C) Bypass CL4 entirely and emulate the SecureRTBuddyDCP endpoint in QEMU
+      (apple_rtkit.c/apple_dcp.c scaffolding) so XNU's AppleDCPLinkServiceSoC attaches
+      without the real secure kernel.
+NEXT if continuing (A): trace 0x10006924e58 (the (table,2,5) lookup) to learn the table
+layout it needs, and what registers domain 0xC00000001's descriptor. Also re-check
+whether 0xC00000001 is the RIGHT domain for this context or if the descriptor needs more
+fields than {id}.

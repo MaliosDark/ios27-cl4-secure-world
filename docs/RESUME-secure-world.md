@@ -418,3 +418,32 @@ synthesized boot does not give SPTM whatever it needs to build the real SK hando
       whole CL4 handoff problem; different (also deep) work.
 The x1-injection probe (UPDATE 7) is left in place behind g_cl4_entry_pc; it is
 experimental scaffolding, not a fix — remove or gate before any real integration.
+
+## UPDATE 9 — Three-front push (parallel): SPTM reversal status (path B)
+Pursuing A, B, C in parallel. B (reverse SPTM's SK bootstrap) progress:
+- SPTM Mach-O (firmware/sptm): __TEXT @vmaddr 0xfffffff027004000 (fo 0, 0x18000);
+  __TEXT_EXEC @0xfffffff027098000 (fo 0x94000, 0x64000); __DATA @0xfffffff027100000;
+  __BOOTDATA @0xfffffff027110000. Loaded with a per-boot slide (NOT fixed) so file
+  offsets != runtime addresses; adding the probe scratch page shifted the slide.
+- Key SPTM strings (SK bootstrap): "SK BOOTSTRAP PANIC" (fo 0x9dd), "[SK BOOTSTRAP
+  PANIC]", "Execution Modes cannot be supported by more than one domain" (fo 0x247c),
+  "SK bootstrap complete.", "sptm_init_txm_bootstrap_complete", "Bootstrapping XNU...",
+  "uat_bootstrap_parse_dt", "uat_instance->handoff_region->micro_magic", "Too many
+  handoff pages!". So SPTM builds the SK handoff from a "handoff_region" and parses the
+  device tree (uat_bootstrap_parse_dt). The "Execution Modes ... more than one domain"
+  string is the domain-setup logic.
+- The genter->CL4 flow at runtime: SPTM executes `genter` (this run: EL2 PC
+  0xfffffff0070a390c-ish), gxf entry at 0xfffffff0070a3858, then ERET to CL4 entry
+  0x1000691d4f0 with x0=boot-handoff, x1=0. Our probe injects x1 there.
+- BLOCKER for static analysis: SPTM code does not reference the domain string via plain
+  adrp/add to the absolute vmaddr (no xref found), suggesting SPTM uses a base-register /
+  PIC scheme. Runtime disasm needs PHYSICAL addresses (QMP `x/` fails once the CPU is in
+  CL4 with MMU off; must use `xp/` at the physical mapping of 0xfffffff0070a38xx).
+- NEXT for B: find the physical address backing SPTM __TEXT_EXEC (from the loader's
+  macho_load(&sptm_mi, blob_head) placement / adt SPTM-rx region) and `xp/`-disassemble
+  the gxf/genter/eret handler to see how x0/x1 are computed for the SK genter, and what
+  in the handoff_region / device tree would make SPTM pass a non-zero x1 (the SK domain
+  descriptor). Alternatively grep SPTM for "uat_bootstrap_parse_dt" xrefs to see which DT
+  properties drive the SK handoff.
+Paths A (CL4 init chain) and C (emulate SecureRTBuddyDCP) are being analyzed in parallel;
+findings to be merged here.

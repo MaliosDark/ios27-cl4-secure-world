@@ -1727,3 +1727,22 @@ index 0716ca9..6eeb910 100644
      /*
       * With PMSA, when the MPU is disabled, all memory types in the
       * default map are Normal, so don't need aligment enforcing.
+diff --git a/target/arm/tcg/pauth_helper.c b/target/arm/tcg/pauth_helper.c
+index 2bd479c..3ba5a96 100644
+--- a/target/arm/tcg/pauth_helper.c
++++ b/target/arm/tcg/pauth_helper.c
+@@ -446,6 +446,14 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+ #ifdef QEMU_SPTM_DISABLE_PAC
+     return orig_ptr;
+ #endif // QEMU_SPTM_DISABLE_PAC
++    /* Bring-up aid: DARWIN_NOPAC=1 strips pointer auth without faulting, so
++     * correctly-signed pointers still resolve while uninitialised ones stop
++     * crashing at the auth site -- lets us test the AppleDCP callback path. */
++    {
++        static int nopac = -1;
++        if (nopac < 0) nopac = getenv("DARWIN_NOPAC") ? 1 : 0;
++        if (nopac) return orig_ptr;
++    }
+ 
+     if (param.mtx) {
+         cmp_mask &= ~MAKE_64BIT_MASK(56, 4);

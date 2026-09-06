@@ -761,3 +761,22 @@ output half of the pipeline (DCP -> framebuffer -> DarwinFB -> screen) is COMPLE
 visible. Remaining for a graphical iOS UI: the guest IOMFB delivering real surfaces
 (needs the full OS, not the ramdisk, + the IOMFB/EPIC RPC) -- but the panel now lights
 and shows the live kernel boot. env: DCP_NO_SCANOUT=1 disables the painter.
+
+## UPDATE 20 — Graphical iPhone boot screen on the panel (real progress + log)
+apple_dcp.c now renders a real iPhone-style boot screen driven by the guest's own log:
+- Device identity "iPhone17,3 / iOS 27 * t8140".
+- A progress RING whose fill is inferred from actual boot milestones (boot_check_stage
+  scans each completed log line: SPTM/XNU -> apfs/mountroot -> RTBuddy/IOService ->
+  launchd/ignition -> done), eased smoothly, with a rotating comet head and % in the
+  center; stage label below ("Iniciando el kernel XNU" ... "iOS en marcha").
+- The live kernel/launchd console in the lower panel, phosphor, newest brightest.
+- RGB scanout proof strip. env DCP_NO_SCANOUT=1 disables it.
+Reached 100% / "iOS en marcha" booting to userspace (launchd/ignition), the real
+com.apple.xpc.launchd log rendered on the panel. shots/panel-boot-screen.png.
+Established (dead ends for real graphical UI, all tested): boot_args.Video is fully
+populated but iOS 27 does not render to it (uses IOMFB); AppleDCP's init crashes on an
+uninitialised handler table BEFORE opening the AFK endpoint (garbage callback, NOT a PAC
+issue -- DARWIN_NOPAC=1 strips auth and it still crashes), because its secure-world DCP
+service objects are absent. So the graphical iOS UI (SpringBoard) needs the full OS (not
+ramdisk) + AppleDCP/IOMFB init completing -- the large remaining effort. What the panel
+shows now is the real iOS boot, graphically, driven end-to-end by our emulated DCP.

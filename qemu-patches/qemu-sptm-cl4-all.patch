@@ -1207,7 +1207,7 @@ index 2a21540..0df6777 100644
  arm_common_ss.add(custom_target('apple_regs_autogen.h',
    output: 'apple_regs_autogen.h',
 diff --git a/hw/arm/xnuboot_sptm.c b/hw/arm/xnuboot_sptm.c
-index b96d421..24f9541 100644
+index b96d421..f1efab3 100644
 --- a/hw/arm/xnuboot_sptm.c
 +++ b/hw/arm/xnuboot_sptm.c
 @@ -86,6 +86,94 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
@@ -1486,7 +1486,7 @@ index b96d421..24f9541 100644
      }
  
  #undef PUSH_SEG
-@@ -380,11 +599,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -380,11 +599,142 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      } else {
          args.memSize = info->dram_size;
      }
@@ -1558,6 +1558,28 @@ index b96d421..24f9541 100644
  
 +    // Hand XNU the boot display. With v_baseAddr set, PE_init_platform wires
 +    // up the graphics console instead of falling back to serial only.
++    // Back the embedded panic log (agent finding): XNU's panic logger maps
++    // /pram reg and stores a global pointer; if that map fails (reg was {0,0})
++    // the global stays NULL and a later panic double-faults (store to NULL+0xb1),
++    // MASKING the real panic. Carve RAM and set /pram reg base; size + the
++    // /chosen:embedded-panic-log-size gate come from firmware/dtree_pram.
++    {
++        uint64_t psz = 0x100000;
++        args.memSize = ROUND_DOWN_POW2(args.memSize - psz, DARWIN_PAGE_SIZE);
++        hwaddr pram_base = info->dram_base + args.memSize;
++        struct dtree_node *pram =
++            adt_find_node((struct dtree_node*)dtree, "pram");
++        if (pram) {
++            u64 *reg = adt_get_prop_val(pram, "reg");
++            if (reg) { reg[0] = pram_base; reg[1] = psz; }
++            printf("[darwin] pram panic-log backed at 0x%llX size 0x%llX\n",
++                   (unsigned long long)pram_base, (unsigned long long)psz);
++        } else {
++            printf("[darwin] pram node not found in dtree\n");
++        }
++        fflush(stdout);
++    }
++
 +    // Publish the framebuffer the way iBoot does. boot_args.Video alone isn't
 +    // enough on modern iOS: the /vram node is what the IODeviceTree platform
 +    // expert reads, and display-scale is left at 0 by the stock tree, which is

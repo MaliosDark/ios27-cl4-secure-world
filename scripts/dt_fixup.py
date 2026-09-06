@@ -218,6 +218,20 @@ def fixup(d, nvram_file):
   d['chosen'].props['nvram-total-size'] = f"u32:{len(d['chosen'].props['nvram-proxy-data'])}"
   d['chosen'].props['nvram-bank-size']  = f"u32:{len(d['chosen'].props['nvram-proxy-data'])}"
 
+  # Back the embedded panic log so XNU's panic logger doesn't double-fault and
+  # MASK the real panic (agent finding: /pram reg is {0,0} -> map fails -> the
+  # global paniclog pointer stays null -> store to NULL+0xb1). The loader carves
+  # RAM and patches /pram reg base at boot; here we set its size and add the
+  # /chosen:embedded-panic-log-size the logger gates on.
+  if __import__('os').environ.get('PRAM','1') != '0':
+    _psz = 0x100000
+    try:
+      d['pram'].props['reg'] = struct.pack("<QQ", 0, _psz)   # base patched at boot
+      d['chosen'].props['embedded-panic-log-size'] = struct.pack("<I", _psz)
+      import sys as _sys; print("dt_fixup: pram backed, embedded-panic-log-size=0x%x"%_psz, file=_sys.stderr)
+    except Exception as _e:
+      import sys as _sys; print("dt_fixup: pram fixup failed:", _e, file=_sys.stderr)
+
   if 'InvalidateHmac' in d['arm-io']['sep']['iop-sep-nub']:
     d['arm-io']['sep']['iop-sep-nub']['InvalidateHmac'].props['config'] = "u32:1"
     d['arm-io']['sep']['iop-sep-nub']['InvalidateHmac'].props['sio-hmac1-offset'] = "u64:0"

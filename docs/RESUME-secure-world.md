@@ -835,3 +835,23 @@ bash correctly (verified "uname"/"ls" arriving at bash-5.3#). Two bash-5.3# prom
 typed "ls" visible on the panel (shots/panel-shell-typing.png). Interactive root shell on
 the iPhone panel is live and usable; only cosmetic issue is launchd sharing /dev/console.
 So: ver_pantalla.sh now gives a lit iPhone panel + a working keyboard into a root bash.
+
+## UPDATE 26 — pram/panic-log backed: real AppleDCP panic UNMASKED (agent Step 1 done)
+Agent (appledcp-init) correction: both DCP crashes are in BASE XNU, not the kexts; and
+far=0xb1 is the kernel PANIC LOGGER double-faulting because the /pram (embedded panic log)
+region was {0,0} -> map fails -> global paniclog ptr (0xfffffff00b6c08b8) NULL -> store to
+NULL+0xb1. It MASKS the real panic. Fix (Step 1):
+- dt_fixup.py PRAM block + a direct blob-patcher: /pram reg size + /chosen
+  embedded-panic-log-size = 0x100000 (dtree_pram / dtree_nr2_pram).
+- hw/arm/xnuboot_sptm.c: carve 0x100000 off DRAM, patch /pram reg base to it.
+RESULT: boot with dtree_nr2_pram + DARWIN_RTKIT=1 -> "[darwin] pram panic-log backed at
+0x101FFC38000" and the panic now PRINTS CLEANLY: "Debugger message: panic / Paniclog
+version: 16" -- the far=0xb1 double fault is GONE. The remaining REAL panic is crash A:
+"PC alignment exception ... pc 0x..2706e459, lr 0x..2ac937c8" = the base-XNU callback-list
+walker (0xfffffff00ac9376c) calling a GARBAGE PAC callback, because AppleDCP left its
+handler table uninitialised (took the secure/exclave-firmware branch with no-firmware-
+service kept). So crash A is now the SOLE DCP blocker, cleanly visible.
+NEXT (agent Steps 2-4): symbolicate crash A in the AppleDCP kext, find the secure-vs-normal
+firmware branch, flip it via DT or a minimal branch-gate patch so AppleDCP populates its
+handler table and writes CPU_CONTROL RUN -> "[dcp] AFK INIT" against apple_dcp -> then
+decode the IOMFB surface (agent Step 6) and blit the guest's real surface to fb_base.

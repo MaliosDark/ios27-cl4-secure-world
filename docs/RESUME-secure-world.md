@@ -579,3 +579,37 @@ NEXT for path C:
      scan out to the DARWIN_FB console.
 The alignment/null-call is the classic ChefKiss-t8030 DCP bring-up sequence (per Parts
 26/36/37): several ordered null-derefs to patch before AppleDCP's start() completes.
+
+## UPDATE 14 — ctor-runner INTEGRATED and WORKING (path A real fix)
+Integrated the agent's __mod_init_func constructor-runner (design in
+ios27-cl4-secure-world/experiments/cl4-ctor-runner) into the LIVE tree:
+- hw/arm/xnuboot_sptm.c: globals g_cl4_tramp_pc/g_cl4_ctors_done/g_cl4_tpidr; the
+  104-byte trampoline byte array; CL4-dummypage enlarged to 0x8000 scratch holding
+  {domain descriptor @+0, trampoline @+0x80, fake per-thread ctx @+0x200 with
+  cells @+0x400, stack top @+0x8000}; pool filled with {modinit=rx+0x698fc0,
+  modinit+88, stacktop, entry}. Gate: CL4_NO_CTORS disables it.
+- target/arm/tcg/helper-a64.c: in HELPER(exception_return), one-shot divert of the
+  CL4-entry ERET to the trampoline (g_cl4_ctors_done), AND set TPIDR_EL0
+  (cp15.tpidr_el[0]) = g_cl4_tpidr just before, so ctors that read TPIDR see a
+  valid empty context instead of faulting.
+RESULT: all 11 constructors run to completion (trampoline installs a scratch stack,
+loops __mod_init_func, restores x0/x1, SP=0, br to entry). This seeds the STATIC
+domain-descriptor table 0xc068e840 (the real fix for the "domain id 0x50" fault --
+root cause, not the x1 hack). CL4 reaches its main init.
+- FIRST attempt faulted inside a ctor at 0x1000692aca4 (`mrs x8,tpidr_el0;
+  ldr x0,[x8,#8]`, x8=0) -- exactly the agent's flagged TPIDR risk. Fixed by the
+  fake per-thread context above.
+- Now the first fault is the (2,5) lazy-singleton FACTORY at 0x1000691cd00
+  (FAR 0x2a0) -- the SAME frontier the x1-probe reached (UPDATE 7). The factory
+  0x10006925e70(2,5) walks the PER-THREAD registry (TPIDR->[+0x10]->list), which is
+  still my empty fake list, so it returns null and the caller derefs [null+0x2a0].
+Interpretation: ctors seed the STATIC tables (domain descriptors), but the
+PER-THREAD registry the (2,5) factory reads is populated later by CL4's own domain
+setup (which installs the real TPIDR at 0xc00aa724). We fault at (2,5) BEFORE that.
+NEXT: understand what the (2,5) factory 0x10006925e70 does -- does it ALLOCATE (needs
+a heap CL4 hasn't set up) or REGISTER into the per-thread list? If allocation, CL4's
+allocator/domain heap must come up first (may need more of the real handoff). If the
+per-thread registry should already hold (2,5), find which ctor/step registers it.
+Either way the ctor-runner is the correct root-cause mechanism and is now in place;
+the x1 injection is still active alongside (can be dropped once ctor-seeding alone is
+confirmed sufficient for the domain descriptor).

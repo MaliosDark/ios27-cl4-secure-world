@@ -44,20 +44,23 @@ index 699da26..8f023d1 100644
                      memattr = 0xf0;  /* Tagged, Normal, WB, RWA */
                  } else {
 diff --git a/target/arm/tcg/helper-a64.c b/target/arm/tcg/helper-a64.c
-index d8a5f2f..cee00c7 100644
+index d8a5f2f..3aa8300 100644
 --- a/target/arm/tcg/helper-a64.c
 +++ b/target/arm/tcg/helper-a64.c
-@@ -18,6 +18,9 @@
+@@ -18,6 +18,12 @@
   */
  
  #include "qemu/osdep.h"
 +
 +extern uint64_t g_cl4_entry_pc;
 +extern uint64_t g_cl4_x1_inject;
++extern uint64_t g_cl4_tramp_pc;
++extern int g_cl4_ctors_done;
++extern uint64_t g_cl4_tpidr;
  #include "qemu/units.h"
  #include "cpu.h"
  #include "gdbstub/helpers.h"
-@@ -753,6 +756,21 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
+@@ -753,6 +759,37 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
          }
          env->pc = new_pc;
  
@@ -74,6 +77,22 @@ index d8a5f2f..cee00c7 100644
 +            qemu_log_mask(CPU_LOG_INT,
 +                          "[cl4] probe: injected x1=0x%" PRIx64 " at CL4 entry\n",
 +                          env->xregs[1]);
++        }
++        /*
++         * Divert the FIRST guarded return into CL4's entry to the ctor-runner
++         * trampoline, which calls the 11 __mod_init_func constructors and then
++         * branches to the real entry (its Lentry == g_cl4_entry_pc) itself.
++         */
++        if (g_cl4_tramp_pc && !g_cl4_ctors_done &&
++            new_pc == g_cl4_entry_pc && env->currentg) {
++            g_cl4_ctors_done = 1;
++            if (g_cl4_tpidr) {
++                env->cp15.tpidr_el[0] = g_cl4_tpidr;
++            }
++            env->pc = g_cl4_tramp_pc;
++            qemu_log_mask(CPU_LOG_INT,
++                          "[cl4] ctor-runner: divert entry -> trampoline 0x%" PRIx64 "\n",
++                          g_cl4_tramp_pc);
 +        }
 +
          qemu_log_mask(CPU_LOG_INT, "Exception return from AArch64 EL%d to "

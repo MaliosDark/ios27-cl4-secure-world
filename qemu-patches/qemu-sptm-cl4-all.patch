@@ -1118,7 +1118,7 @@ index 2a21540..0df6777 100644
  arm_common_ss.add(custom_target('apple_regs_autogen.h',
    output: 'apple_regs_autogen.h',
 diff --git a/hw/arm/xnuboot_sptm.c b/hw/arm/xnuboot_sptm.c
-index b96d421..21a906b 100644
+index b96d421..c876afe 100644
 --- a/hw/arm/xnuboot_sptm.c
 +++ b/hw/arm/xnuboot_sptm.c
 @@ -86,6 +86,62 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
@@ -1212,51 +1212,65 @@ index b96d421..21a906b 100644
          DARWIN_PAGE_SIZE; // extra page we skip in front of the device tree
  
      assert(GET_L2_PT_INDEX(bkc_mi.virtlo) > bytes_before_sptm);
-@@ -238,7 +303,18 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -238,7 +303,38 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          END_ENTRY("BootKC-rs");
      }
  
 -    // CL4-rx, CL4-ro (ignored)
-+    // CL4 secure kernel (exclavecore 'txtk'), phase 1: code only. SPTM's
-+    // validate_region_order requires DeviceTree to immediately follow CL4-ro,
-+    // so only __TEXT (+ empty CL4-ro) may live here; __DATA/__LINKEDIT go in
-+    // phase 2 after BootKC-le.
++    // CL4 secure kernel (exclavecore 'txtk'). CL4 runs its early boot MMU-OFF
++    // with PC-relative (adrp) accesses to its own __DATA, so __DATA MUST sit at
++    // the contiguous physical offset rx + (__DATA.vmaddr - __TEXT.vmaddr) =
++    // rx + 0x68c000. We therefore push __TEXT, __DATA and __LINKEDIT contiguously
++    // here and cover __DATA+__LINKEDIT with the CL4-ro region, so SPTM still sees
++    // DeviceTree immediately after CL4-ro (validate_region_order is satisfied).
++    // The writable CL4-rw / CL4-le regions are registered later (phase 2) pointing
++    // back into this same contiguous block.
 +    if (have_cl4) {
 +        cl4_rx_phys = blob_head;
 +        PUSH_SEG(cl4, "__TEXT");
 +        END_ENTRY("CL4-rx");
-+        set_adt_mmap(map, "CL4-ro", blob_head, 0);   // empty; keeps ordering
-+        set_adt_mmap(map, "CL4-virt", cl4_mi.virtlo, 0);
-+        set_adt_mmap(map, "CL4-entry", cl4_mi.entrypoint, 0);
-+    }
- 
-     // DeviceTree
-     {
-@@ -316,6 +392,23 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
-     {
-         PUSH_SEG(bkc, "__LINKEDIT");
-         END_ENTRY("BootKC-le");
-+
-+    // CL4-rw, CL4-le (phase 2): __DATA/__LINKEDIT after BootKC-le, then rebase.
-+    if (have_cl4) {
++        // __DATA and __LINKEDIT immediately after __TEXT (contiguous).
 +        cl4_rw_phys = blob_head;
 +        PUSH_SEG(cl4, "__DATA");
-+        END_ENTRY("CL4-rw");
 +        cl4_le_phys = blob_head;
 +        PUSH_SEG(cl4, "__LINKEDIT");
-+        END_ENTRY("CL4-le");
++        // Cover __DATA+__LINKEDIT as CL4-ro so the region order stays
++        // CL4-rx, CL4-ro, DeviceTree (SPTM requirement).
++        END_ENTRY("CL4-ro");
++        set_adt_mmap(map, "CL4-virt", cl4_mi.virtlo, 0);
++        set_adt_mmap(map, "CL4-entry", cl4_mi.entrypoint, 0);
++        // Rebase __DATA chained pointers now that the block is placed. Contiguous
++        // layout -> uniform physical base: new = rx_phys + target_offset.
 +        apply_cl4_fixups((u8*)info->cl4_f.buf, cl4_rx_phys, cl4_rw_phys,
 +                         cl4_le_phys);
-+        printf("[cl4] rx 0x%llX rw 0x%llX le 0x%llX virt 0x%llX entry 0x%llX\n",
++        printf("[cl4] contiguous rx 0x%llX rw 0x%llX le 0x%llX virt 0x%llX entry 0x%llX\n",
 +               (unsigned long long)cl4_rx_phys, (unsigned long long)cl4_rw_phys,
 +               (unsigned long long)cl4_le_phys, (unsigned long long)cl4_mi.virtlo,
 +               (unsigned long long)cl4_mi.entrypoint);
 +        fflush(stdout);
 +    }
+ 
+     // DeviceTree
+     {
+@@ -316,6 +412,17 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+     {
+         PUSH_SEG(bkc, "__LINKEDIT");
+         END_ENTRY("BootKC-le");
++
++    // CL4-rw, CL4-le (phase 2): the writable __DATA / __LINKEDIT regions were
++    // already placed contiguously after __TEXT in phase 1; here we only register
++    // the region descriptors pointing back at that block so SPTM's SK handoff
++    // reports the correct addresses. (No blob_head advance -- do NOT re-push.)
++    if (have_cl4) {
++        u64 cl4_data_sz = SEGLEN(cl4, "__DATA");
++        u64 cl4_le_sz   = SEGLEN(cl4, "__LINKEDIT");
++        set_adt_mmap(map, "CL4-rw", cl4_rw_phys, cl4_data_sz);
++        set_adt_mmap(map, "CL4-le", cl4_le_phys, cl4_le_sz);
++    }
      }
  
      // CL4-dummypage
-@@ -338,6 +431,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -338,6 +445,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          blob_head += info->ramdisk_f.len;
          blob_head = ROUND_NEXT_PAGE(blob_head);
          END_ENTRY("RAMDisk");
@@ -1268,7 +1282,7 @@ index b96d421..21a906b 100644
      }
  
  #undef PUSH_SEG
-@@ -380,11 +478,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -380,11 +492,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      } else {
          args.memSize = info->dram_size;
      }

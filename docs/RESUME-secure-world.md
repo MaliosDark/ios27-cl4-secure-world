@@ -264,3 +264,37 @@ NEXT STEPS to try:
 STATUS: CL4 now boots from entry through full early init + a large SIMD memcmp and
 into domain registration. The "won't execute" barrier is BROKEN. Remaining work is
 feeding CL4 the correct SPTM->SK handoff so its domain graph is valid.
+
+## UPDATE 5 — __DATA made physically CONTIGUOUS; domain lookup now passes
+Root of the 0x50 "bad domain id": CL4 runs MMU-off and reaches its own __DATA via
+PC-relative `adrp` (e.g. entry `adrp x1,0xc068c000`), which with MMU off lands at
+rx_phys + 0x68c000 = 0x10006F10000 (the CONTIGUOUS position). The split layout put
+__DATA far away (0x100076CC000), so CL4 read whatever sat at 0x10006F10000 (the
+DeviceTree region) as __DATA -> garbage domain id 0x50.
+
+FIX (hw/arm/xnuboot_sptm.c): load CL4 __TEXT + __DATA + __LINKEDIT CONTIGUOUSLY in
+phase 1 and cover __DATA+__LINKEDIT with the CL4-ro region (so region order stays
+CL4-rx, CL4-ro, DeviceTree and SPTM's validate_region_order is satisfied). Phase 2
+only registers CL4-rw / CL4-le descriptors pointing back into that block (no second
+push). Rebase is now uniform: new = rx_phys + target_offset. Loader prints
+"[cl4] contiguous rx .. rw 0x10006F10000 le 0x10006F98000 ..".
+RESULT: the domain-descriptor lookup (0x1000691eba0) now SUCCEEDS. CL4 advances past
+it. (validate_region_order did NOT complain — the extra pre-DeviceTree page lives
+inside the DeviceTree region, so CL4-ro end == DeviceTree start.)
+
+### New frontier: null field in a CL4 __DATA-bss global
+Next fault (`-d int`): Data Abort, ESR 0x25 DFSC 0x10 (external abort), FAR 0x0,
+ELR 0x1000691c528 = tiny accessor `ldr x0,[x0]; ret` called with x0=0 (deref of
+physical 0 with MMU off -> external abort). Caller 0x1000692afa8:
+  mov x23, x0(ret of 0x1000691e008); ldr x0,[x23+8]; cbnz x0,skip;
+  ldr x0,[x23+0x18]; bl 0x1000691c528(deref)
+x23 = 0x10006f83808 = rx+0x6ff808 -> that is offset 0x73808 into __DATA, i.e. in the
+ZERO-FILLED bss part (tadk filesize is only 0x48000). So x23 is a CL4 global at
+0x10006f83000 whose fields [+8] and [+0x18] are still 0 -> not yet initialised.
+0x1000691e008 itself writes to 0x10006f83900 (adrp 0x10006f83000+0x900) and returns
+a pointer into this global area. So CL4 init has not populated this global; likely a
+constructor/registration step that needs an input we don't yet provide (handoff at
+x0=0x10006ff4370 has segment addrs at +0x20/+0x28/+0x30 = rx/rw/le and 0x10006f10000
+at +0x18/+0x38). NEXT: trace 0x1000691e008 fully to see what it reads to build the
+global, and what should have set [x23+8]/[x23+0x18]. This is CL4 runtime init, one
+layer past domain registration.

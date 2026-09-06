@@ -1,0 +1,400 @@
+<title>Placa del Mundo Seguro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<style>
+  :root{
+    color-scheme: dark;
+    --board:#0b1310;      /* deep PCB ground */
+    --board2:#0f1a16;
+    --panel:#111d18;
+    --edge:#1f3a30;       /* silkscreen edge */
+    --edge2:#173029;
+    --copper:#b98b3e;     /* trace copper */
+    --copper-dim:#5a4a2c;
+    --silk:#cdd8d1;       /* silkscreen text */
+    --silk-dim:#7f9088;
+    --ok:#37d98a;         /* working */
+    --partial:#f0b429;    /* partial */
+    --blocked:#ef5b5b;    /* blocked */
+    --missing:#5b6b74;    /* not built */
+    --phos:#38e0cf;       /* phosphor / the screen we want */
+    --ink:#e7f0eb;
+    --muted:#8fa39a;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:
+      radial-gradient(1200px 600px at 78% -8%, #12271f 0%, transparent 60%),
+      radial-gradient(900px 500px at 6% 108%, #101d18 0%, transparent 55%),
+      var(--board);
+    color:var(--ink);
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:14px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1320px;margin:0 auto;padding:28px 22px 60px}
+  h1,h2,h3{font-family:"IBM Plex Sans Condensed","IBM Plex Mono",sans-serif;margin:0;text-wrap:balance}
+  .eyebrow{font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--phos);font-weight:600}
+  header h1{font-size:clamp(28px,4.4vw,46px);font-weight:700;letter-spacing:-.01em;line-height:1.02;margin:.28em 0 .18em}
+  header .sub{color:var(--muted);max-width:70ch;font-size:14.5px}
+  .tally{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .stat{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--edge2);
+    border-radius:8px;padding:8px 13px;font-size:12.5px}
+  .stat b{font-family:"IBM Plex Sans Condensed";font-size:17px;font-weight:700}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
+  .c-ok{color:var(--ok)} .c-partial{color:var(--partial)} .c-blocked{color:var(--blocked)}
+  .c-missing{color:var(--missing)} .c-phos{color:var(--phos)}
+
+  .toolbar{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;margin:26px 0 12px}
+  .paths{display:flex;gap:6px;background:var(--board2);border:1px solid var(--edge2);border-radius:10px;padding:5px}
+  .paths button{font-family:inherit;font-size:12px;letter-spacing:.02em;color:var(--silk-dim);background:none;
+    border:0;padding:7px 13px;border-radius:7px;cursor:pointer;transition:.16s}
+  .paths button:hover{color:var(--ink)}
+  .paths button[aria-pressed="true"]{background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 1px var(--edge)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .swatch{width:20px;height:0;border-top:2px solid var(--copper)}
+  .swatch.dash{border-top-style:dashed;border-color:var(--missing)}
+
+  .stage{display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start;margin-top:8px}
+  @media(max-width:1040px){.stage{grid-template-columns:1fr}}
+  .boardbox{background:
+      linear-gradient(180deg,#0e1c17,#0a1410);
+    border:1px solid var(--edge);border-radius:16px;padding:6px;overflow-x:auto;
+    box-shadow:0 30px 80px -40px #000, inset 0 0 0 1px #0c1712, inset 0 0 120px -40px #000}
+  svg.board{display:block;width:100%;min-width:940px;height:auto}
+
+  .chip{cursor:pointer}
+  .chip rect.body{transition:filter .16s, stroke .16s}
+  .chip:hover rect.body{filter:brightness(1.18)}
+  .chip.sel rect.body{stroke-width:2.2}
+  .silk-name{font-family:"IBM Plex Sans Condensed";font-weight:700;letter-spacing:.02em;fill:var(--silk)}
+  .silk-sub{font-family:"IBM Plex Mono";fill:var(--silk-dim)}
+  .pin{fill:#3a5247}
+
+  .detail{position:sticky;top:18px;background:var(--panel);border:1px solid var(--edge);border-radius:14px;
+    padding:18px 18px 20px;min-height:360px}
+  .detail .pill{display:inline-flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;padding:5px 10px;border-radius:20px;border:1px solid currentColor;font-weight:600}
+  .detail h2{font-size:23px;font-weight:700;margin:14px 0 2px;letter-spacing:-.01em}
+  .detail .role{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+  .detail .blurb{font-size:13px;color:#c8d5ce;border-left:2px solid var(--edge);padding-left:12px;margin:0 0 16px}
+  .dlist{margin:0 0 14px;padding:0;list-style:none}
+  .dlist .lbl{font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--silk-dim);margin-bottom:7px}
+  .dlist li{display:flex;gap:9px;font-size:12.5px;padding:3px 0;color:#cfdad3;align-items:baseline}
+  .dlist li::before{content:"";width:6px;height:6px;border-radius:1px;flex:0 0 auto;margin-top:6px;background:currentColor}
+  .dlist.done{color:var(--ok)} .dlist.todo{color:var(--partial)} .dlist li span{color:#cfdad3}
+  .hint{font-size:11px;color:var(--silk-dim);margin-top:6px}
+
+  .rows{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:30px}
+  @media(max-width:820px){.rows{grid-template-columns:1fr}}
+  .block h3{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--phos);margin-bottom:14px;font-weight:600}
+  .mile{display:flex;gap:13px;padding:11px 0;border-top:1px solid var(--edge2)}
+  .mile:first-of-type{border-top:0}
+  .mile .n{font-family:"IBM Plex Sans Condensed";font-weight:700;color:var(--ok);font-size:15px;min-width:26px}
+  .mile b{font-family:"IBM Plex Sans Condensed";font-weight:600;font-size:14px;color:var(--ink);display:block;margin-bottom:1px}
+  .mile small{color:var(--muted);font-size:11.5px}
+  .front{background:var(--board2);border:1px solid var(--edge2);border-radius:12px;padding:15px 16px;margin-bottom:12px}
+  .front .tag{font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;font-weight:600}
+  .front h4{font-family:"IBM Plex Sans Condensed";font-size:15px;font-weight:700;margin:6px 0 6px}
+  .front p{margin:0;font-size:12px;color:var(--muted)}
+  .front code{color:#d9c58a;font-size:11.5px}
+  footer{margin-top:38px;color:var(--silk-dim);font-size:11.5px;border-top:1px solid var(--edge2);padding-top:16px;line-height:1.7}
+  @media(prefers-reduced-motion:reduce){.flow{animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">iOS 27 · iPhone17,3 · t8140 · darwin-vm / qemu-sptm</div>
+    <h1>La placa del mundo seguro</h1>
+    <p class="sub">El aparato que estamos construyendo para encender la pantalla de iOS 27, pieza por pieza. Cada chip es un componente del arranque; cada traza, una conexión real. Verde funciona, ámbar arranca a medias, rojo bloqueado, gris todavía no existe. Tocá un chip para ver qué hace, qué logramos y qué falta.</p>
+    <div class="tally" id="tally"></div>
+  </header>
+
+  <div class="toolbar">
+    <div class="paths" role="group" aria-label="Rutas a la pantalla">
+      <button data-path="all" aria-pressed="true">Ver todo</button>
+      <button data-path="secure" aria-pressed="false">Ruta segura (CL4)</button>
+      <button data-path="bypass" aria-pressed="false">Ruta bypass (DCP)</button>
+    </div>
+    <div class="legend">
+      <span><i class="dot c-ok"></i>funciona</span>
+      <span><i class="dot c-partial"></i>parcial</span>
+      <span><i class="dot c-blocked"></i>bloqueado</span>
+      <span><i class="dot c-missing"></i>falta</span>
+      <span><i class="dot c-phos"></i>la pantalla</span>
+      <span><i class="swatch"></i>traza viva</span>
+      <span><i class="swatch dash"></i>traza por construir</span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="boardbox">
+      <svg class="board" viewBox="0 0 1280 700" role="img" aria-label="Diagrama tipo placa madre del arranque seguro de iOS 27">
+        <defs>
+          <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="ledglow" x="-160%" y="-160%" width="420%" height="420%">
+            <feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <pattern id="grid" width="26" height="26" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="1" fill="#14261f"/>
+          </pattern>
+        </defs>
+        <rect x="0" y="0" width="1280" height="700" fill="url(#grid)"/>
+        <!-- lane labels -->
+        <text x="24" y="70" class="silk-sub" font-size="11" letter-spacing="3" fill="#3f5a4f">MUNDO SEGURO · EL1 guarded</text>
+        <text x="24" y="392" class="silk-sub" font-size="11" letter-spacing="3" fill="#3f5a4f">MUNDO NORMAL · XNU · EL1</text>
+        <g id="traces"></g>
+        <g id="chips"></g>
+      </svg>
+    </div>
+
+    <aside class="detail" id="detail" aria-live="polite"></aside>
+  </div>
+
+  <div class="rows">
+    <div class="block">
+      <h3>El camino recorrido</h3>
+      <div id="miles"></div>
+    </div>
+    <div class="block">
+      <h3>La frontera — lo que falta para los píxeles</h3>
+      <div class="front">
+        <span class="tag c-missing">Ruta bypass (DCP) · la más corta a píxeles</span>
+        <h4>Emular el controlador de display IOMFB</h4>
+        <p>El mailbox del DCP ya responde. Falta resolver los null-derefs de AppleDCP y construir el protocolo <code>IOMFB/EPIC</code> (mode-set · superficies · swap) y el scanout al framebuffer. Es el grueso del trabajo — escala ChefKiss-t8030.</p>
+      </div>
+      <div class="front">
+        <span class="tag c-blocked">Ruta segura (CL4)</span>
+        <h4>Handoff SPTM→SK + rutear los <code>svc</code> al monitor</h4>
+        <p>CL4 ejecuta pero su domain-setup necesita el handoff correcto y que sus llamadas <code>svc</code> lleguen a SPTM. Y aun booteando entero, necesita <code>ExclaveOS</code> (164 MB) para registrar el servicio de display.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Estado a esta sesión · repo <b style="color:var(--silk)">ios27-cl4-secure-world</b> (15 commits) · 3 fixes de CPU guarded + mailbox DCP activo + CL4 ejecutando.<br>
+    No es firmware ni llaves — solo el mapa del aparato. La mitad del pipeline (framebuffer → consola) está lista; falta la mitad del DCP.
+  </footer>
+</div>
+
+<script>
+const C = {
+  sptm:{name:"SPTM",sub:"secure page table monitor",st:"ok",x:44,y:300,w:150,h:96,
+    role:"El monitor que arranca y gobierna los 3 dominios (XNU, TXM, SK). Corre en EL2 guarded.",
+    blurb:"El binario real de Apple corre y bootstrapea todo. Es la raíz de la placa.",
+    done:["Bootea SPTM/TXM/XNU","Hace genter al dominio SK (CL4)","Valida el orden de regiones"],
+    todo:["Entregar el handoff SK completo a CL4 (hoy pasa x1=0)","Rutear las llamadas svc de CL4 al monitor"]},
+  txm:{name:"TXM",sub:"trusted execution monitor",st:"ok",x:44,y:126,w:120,h:52,
+    role:"Monitor de ejecución confiable. Dominio guarded que valida code signing.",
+    blurb:"Bootea limpio junto a SPTM.",done:["Bootstrap completo"],todo:[]},
+  iboot:{name:"BOOT",sub:"cadena de arranque",st:"ok",x:44,y:470,w:120,h:50,
+    role:"La cadena que carga bootkc/sptm/txm/dtree/ramdisk en memoria.",
+    blurb:"El loader de darwin-vm coloca todo en RAM y salta a SPTM.",done:["Carga e inicia el sistema"],todo:[]},
+
+  cl4:{name:"CL4",sub:"secure kernel · exclaves",st:"partial",x:270,y:120,w:176,h:110,
+    role:"El microkernel seguro (SK / cL4). Publica los endpoints seguros como SecureRTBuddyDCP.",
+    blurb:"Pasó de NO ejecutar a ejecutar y correr por su init. El gran salto de estas sesiones.",
+    done:["Ejecuta (3 fixes de CPU guarded: FP, memoria Normal MMU-off, alineación)","__DATA contiguo → el domain-lookup pasa","Corre por su early-init y sus constructores"],
+    todo:["domain-setup necesita el handoff SPTM→SK válido","Sus svc deben rutearse al monitor SPTM","Instala su TPIDR y registra servicios base — hoy se queda en null"]},
+  domreg:{name:"DOMAIN-SETUP",sub:"registro de dominios",st:"blocked",x:524,y:132,w:158,h:80,
+    role:"El paso que construye el contexto per-thread, instala TPIDR y registra los servicios base.",
+    blurb:"Se bloquea leyendo un objeto vacío — su entrada (el handoff) no está poblada.",
+    done:["Ubicada la función (0xc00a6ea4) y el registrador (0xc00982e0)"],
+    todo:["Necesita datos reales del handoff SK","Depende de que los svc lleguen a SPTM"]},
+  exos:{name:"ExclaveOS",sub:"userspace seguro · 164 MB",st:"missing",x:748,y:118,w:168,h:106,
+    role:"El segundo OS del mundo seguro: dyld, Tightbeam IPC y frameworks seguros. Quien REALMENTE registra SecureRTBuddyDCP.",
+    blurb:"No booteado. Es un sistema operativo completo aparte — el requisito oculto de la ruta segura.",
+    done:["Identificado y extraído el bundle (parser DNUB)"],
+    todo:["Bootear CL4 primero","Levantar dyld + Tightbeam seguros","Registrar el servicio de display"]},
+  srb:{name:"SecureRTBuddyDCP",sub:"ruta segura del DCP",st:"missing",x:966,y:138,w:190,h:74,
+    role:"El servicio/ruta segura que XNU espera para hablar con el DCP. Lo publica ExclaveOS.",
+    blurb:"No existe porque ExclaveOS no corre. Es la puerta que la ruta segura debe abrir.",
+    done:["Mapeado cómo XNU lo busca (waitForMatchingService)"],
+    todo:["Requiere ExclaveOS + handshake Tightbeam"]},
+
+  xnu:{name:"XNU",sub:"kernel · mundo normal",st:"ok",x:270,y:432,w:176,h:100,
+    role:"El kernel que corremos por CLI. Bootea a userspace (ramdisk).",
+    blurb:"Arranca hasta launchd/dyld. El mundo normal funciona.",
+    done:["Bootea a userspace headless","Carga los drivers de display"],
+    todo:["Su driver de DCP queda esperando la ruta segura"]},
+  rtbuddy:{name:"RTBuddy · DCP",sub:"driver coprocesador",st:"partial",x:524,y:428,w:156,h:72,
+    role:"El driver RTKit del DCP en XNU. En stock espera para siempre la ruta SecureRTBuddyDCP.",
+    blurb:"Con dtree_nr2 dejó de esperar la ruta segura y arranca contra el mailbox emulado.",
+    done:["Ya no cuelga en waitForMatchingService","Redirigido al mailbox ASC normal (dtree_nr2)"],
+    todo:["Depende de que AppleDCP complete su init"]},
+  appledcp:{name:"AppleDCP",sub:"driver de display",st:"partial",x:524,y:516,w:156,h:58,
+    role:"El driver que maneja el coprocesador de display y habla IOMFB.",
+    blurb:"Pasó de esperar a EJECUTAR su init contra el mailbox emulado.",
+    done:["Corre su init (parche al dispatch de callbacks)"],
+    todo:["Cadena de null-derefs: su estado no se inicializa sin el servicio DCP","Necesita IOMFB para publicar el framebuffer"]},
+  mbox:{name:"apple_dcp",sub:"mailbox emulado · QEMU",st:"partial",x:742,y:424,w:168,h:92,
+    role:"Nuestra emulación del coprocesador DCP en QEMU: mailbox ASC + RTKit + AFK.",
+    blurb:"ACTIVADO con DARWIN_RTKIT=1 — antes estaba dormido. El mailbox ya responde.",
+    done:["Mailbox ASC 0x412e00000 vivo","RTKit ep0 (HELLO/EPMAP) + AFK rings 0x23/0x24/0x25","Geometría 640×1136, fb real conectado"],
+    todo:["Mapear los rings AFK en memoria (bfr_dva)","Implementar el RPC IOMFB/EPIC (mode-set/superficie/swap)"]},
+  iomfb:{name:"IOMFB",sub:"IOMobileFramebuffer",st:"missing",x:742,y:540,w:168,h:56,
+    role:"La capa que recibe superficies del driver y las manda al DCP para mostrarlas.",
+    blurb:"No construida. Es el costo dominante — el protocolo real del display.",
+    done:[],todo:["Construir el RPC EPIC completo","Registro de superficies + swaps"]},
+  dfb:{name:"DarwinFB",sub:"consola de QEMU",st:"ready",x:958,y:300,w:140,h:86,
+    role:"El framebuffer de salida: una consola gráfica de QEMU sobre RAM real.",
+    blurb:"LISTA y esperando píxeles. Cuando el DCP entregue una superficie, acá se ve.",
+    done:["fb 640×1136 asignado (DARWIN_FB=1)","boot_args.Video + /vram publicados","Consola gráfica creada"],
+    todo:["Recibir el scanout desde apple_dcp"]},
+  screen:{name:"PANTALLA",sub:"el objetivo",st:"phos",x:1140,y:150,w:112,h:396,
+    role:"La pantalla del iPhone. El objetivo de todo el aparato.",
+    blurb:"Aún oscura. La mitad del pipeline (framebuffer→consola) está lista; falta el DCP/IOMFB que la alimenta.",
+    done:["Camino completo mapeado de punta a punta"],
+    todo:["Falta que el DCP entregue el primer frame"]}
+};
+
+const T = [
+  ["iboot","r","sptm","l","ok"],
+  ["sptm","t","txm","b","ok"],
+  ["sptm","r","xnu","l","ok"],
+  ["sptm","r","cl4","l","partial","genter · x1=0"],
+  ["cl4","r","domreg","l","blocked"],
+  ["domreg","r","exos","l","missing"],
+  ["exos","r","srb","l","missing"],
+  ["srb","b","rtbuddy","t","blocked","la ruta que XNU espera"],
+  ["xnu","r","rtbuddy","l","ok"],
+  ["rtbuddy","b","appledcp","t","partial"],
+  ["rtbuddy","r","mbox","l","partial","DARWIN_RTKIT"],
+  ["appledcp","r","mbox","l","partial"],
+  ["mbox","b","iomfb","t","missing"],
+  ["mbox","r","dfb","l","missing","scanout"],
+  ["iomfb","r","dfb","l","missing"],
+  ["dfb","r","screen","l","ready"]
+];
+
+const MILES = [
+  ["01","3 fixes de CPU guarded","CL4 pasa de no ejecutar a ejecutar (FP, memoria, alineación)"],
+  ["02","__DATA contiguo","El domain-lookup de CL4 deja de leer basura"],
+  ["03","ctor-runner","Los 11 constructores de CL4 corren"],
+  ["04","DARWIN_RTKIT=1","El mailbox DCP emulado se enciende — antes dormido"],
+  ["05","dtree_nr2","RTBuddy(DCP) suelta la ruta segura y usa el mailbox"],
+  ["06","AppleDCP arranca","El driver de display ejecuta su init contra el mailbox"]
+];
+
+const COL = {ok:getcol("--ok"),partial:getcol("--partial"),blocked:getcol("--blocked"),missing:getcol("--missing"),ready:getcol("--phos"),phos:getcol("--phos")};
+function getcol(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+const NS="http://www.w3.org/2000/svg";
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e}
+function anchor(c,s){const {x,y,w,h}=c;return s==="l"?[x,y+h/2]:s==="r"?[x+w,y+h/2]:s==="t"?[x+w/2,y]:[x+w/2,y+h]}
+function path(a,b){
+  const [ax,ay]=a,[bx,by]=b,r=11;
+  if(Math.abs(ay-by)<3)return `M${ax},${ay} L${bx},${by}`;
+  const mx=(ax+bx)/2, s1=Math.sign(bx-mx)||1, s2=Math.sign(by-ay);
+  return `M${ax},${ay} L${mx-r*s1},${ay} Q${mx},${ay} ${mx},${ay+r*s2} L${mx},${by-r*s2} Q${mx},${by} ${mx+r*s1},${by} L${bx},${by}`;
+}
+const PATHKIND={ok:"live",partial:"live",ready:"live",blocked:"dead",missing:"dead"};
+
+const traceG=document.getElementById("traces"), chipG=document.getElementById("chips");
+const traceEls=[];
+T.forEach(([f,fs,t,ts,st,lab])=>{
+  const d=path(anchor(C[f],fs),anchor(C[t],ts));
+  const live=PATHKIND[st]==="live";
+  const col=COL[st]||COL.missing;
+  const base=el("path",{d,fill:"none",stroke:col,"stroke-width":live?3:2.2,
+    "stroke-linecap":"round","stroke-opacity":live?.9:.5,
+    "stroke-dasharray":live?"none":"3 8"});
+  if(live)base.setAttribute("filter","url(#glow)");
+  base.dataset.f=f;base.dataset.t=t;
+  traceG.appendChild(base);
+  traceEls.push({e:base,f,t,st,live});
+  if(live){
+    const flow=el("circle",{r:3.1,fill:"#eafff7"});
+    flow.setAttribute("class","flow");
+    const anim=el("animateMotion",{dur:(2.4+Math.random()*1.4)+"s",repeatCount:"indefinite",path:d,rotate:"0"});
+    flow.appendChild(anim);flow.style.opacity=.85;traceG.appendChild(flow);
+  }
+  if(lab){
+    const [mx,my]=[(anchor(C[f],fs)[0]+anchor(C[t],ts)[0])/2,(anchor(C[f],fs)[1]+anchor(C[t],ts)[1])/2];
+    const g=el("g",{});
+    const tx=el("text",{x:mx,y:my-6,"text-anchor":"middle","font-size":"9.5","font-family":"IBM Plex Mono",fill:live?col:"#6f8078","letter-spacing":".04em"});
+    tx.textContent=lab;g.appendChild(tx);traceG.appendChild(g);
+  }
+});
+
+function drawChip(id){
+  const c=C[id], col=COL[c.st];
+  const g=el("g",{class:"chip","data-id":id,tabindex:"0",role:"button","aria-label":c.name});
+  g.appendChild(el("rect",{x:c.x+3,y:c.y+4,width:c.w,height:c.h,rx:9,fill:"#000","fill-opacity":.35}));
+  // pins
+  const npx=Math.max(3,Math.round(c.w/34));
+  for(let i=0;i<npx;i++){const px=c.x+14+i*((c.w-28)/(npx-1||1));
+    g.appendChild(el("rect",{x:px-2.5,y:c.y-4,width:5,height:5,rx:1,fill:"#3a5247"}));
+    g.appendChild(el("rect",{x:px-2.5,y:c.y+c.h-1,width:5,height:5,rx:1,fill:"#3a5247"}));}
+  const isScreen=id==="screen";
+  g.appendChild(el("rect",{class:"body",x:c.x,y:c.y,width:c.w,height:c.h,rx:9,
+    fill:isScreen?"#05100d":"url(#chipfill)",stroke:col,"stroke-width":1.4,"stroke-opacity":.85}));
+  // inner fill via gradient fallback: solid
+  g.querySelector(".body").setAttribute("fill",isScreen?"#04120e":"#132420");
+  // status LED
+  g.appendChild(el("circle",{cx:c.x+c.w-14,cy:c.y+14,r:4.4,fill:col,filter:"url(#ledglow)"}));
+  // name + sub
+  const nm=el("text",{class:"silk-name",x:c.x+14,y:c.y+ (c.h>70?30:22),"font-size":c.w>150?16:14});
+  nm.textContent=c.name;g.appendChild(nm);
+  const sb=el("text",{class:"silk-sub",x:c.x+14,y:c.y+(c.h>70?46:38),"font-size":"9.5"});
+  sb.textContent=c.sub;g.appendChild(sb);
+  if(isScreen){
+    for(let i=0;i<9;i++)g.appendChild(el("line",{x1:c.x+10,y1:c.y+70+i*36,x2:c.x+c.w-10,y2:c.y+70+i*36,stroke:"#0d2620","stroke-width":1}));
+    const no=el("text",{x:c.x+c.w/2,y:c.y+c.h/2+30,"text-anchor":"middle","font-size":"10","font-family":"IBM Plex Mono",fill:"#2f5c52","letter-spacing":".2em"});
+    no.textContent="SIN SEÑAL";g.appendChild(no);
+  }
+  g.addEventListener("click",()=>select(id));
+  g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();select(id)}});
+  chipG.appendChild(g);
+}
+Object.keys(C).forEach(drawChip);
+
+// tally
+const counts={ok:0,partial:0,blocked:0,missing:0};
+Object.values(C).forEach(c=>{if(counts[c.st]!==undefined)counts[c.st]++});
+const tallyDefs=[["c-ok","funcionan",counts.ok],["c-partial","parciales",counts.partial],["c-blocked","bloqueados",counts.blocked],["c-missing","por construir",counts.missing]];
+document.getElementById("tally").innerHTML=tallyDefs.map(([cl,l,n])=>
+  `<span class="stat"><i class="dot ${cl}"></i><b>${n}</b> ${l}</span>`).join("");
+
+// milestones
+document.getElementById("miles").innerHTML=MILES.map(([n,t,d])=>
+  `<div class="mile"><div class="n">${n}</div><div><b>${t}</b><small>${d}</small></div></div>`).join("");
+
+const STLABEL={ok:["funciona","c-ok"],partial:["parcial","c-partial"],blocked:["bloqueado","c-blocked"],missing:["por construir","c-missing"],ready:["listo · espera píxeles","c-phos"],phos:["el objetivo","c-phos"]};
+function select(id){
+  document.querySelectorAll(".chip").forEach(g=>g.classList.toggle("sel",g.dataset.id===id));
+  const c=C[id],[lbl,cls]=STLABEL[c.st];
+  const done=c.done.length?`<ul class="dlist done"><div class="lbl">Logrado</div>${c.done.map(x=>`<li><span>${x}</span></li>`).join("")}</ul>`:"";
+  const todo=c.todo.length?`<ul class="dlist todo"><div class="lbl">Falta</div>${c.todo.map(x=>`<li><span>${x}</span></li>`).join("")}</ul>`:"";
+  document.getElementById("detail").innerHTML=
+    `<span class="pill ${cls}"><i class="dot ${cls}"></i>${lbl}</span>
+     <h2>${c.name}</h2><div class="role">${c.sub}</div>
+     <p class="blurb">${c.blurb}</p><p style="font-size:12.5px;color:#c8d5ce;margin:-8px 0 16px">${c.role}</p>
+     ${done}${todo}<p class="hint">Tocá otro chip de la placa para explorarlo.</p>`;
+}
+select("cl4");
+
+// path filter
+const btns=document.querySelectorAll(".paths button");
+const SECURE=new Set(["sptm","cl4","domreg","exos","srb","txm","iboot"]);
+const BYPASS=new Set(["sptm","xnu","rtbuddy","appledcp","mbox","iomfb","dfb","screen","iboot"]);
+btns.forEach(b=>b.addEventListener("click",()=>{
+  btns.forEach(x=>x.setAttribute("aria-pressed",x===b?"true":"false"));
+  const p=b.dataset.path;
+  const setk=p==="secure"?SECURE:p==="bypass"?BYPASS:null;
+  document.querySelectorAll(".chip").forEach(g=>{
+    g.style.opacity=(!setk||setk.has(g.dataset.id))?1:.2;
+  });
+  traceEls.forEach(o=>{
+    const on=!setk||(setk.has(o.f)&&setk.has(o.t));
+    o.e.style.opacity=on?1:.12;
+  });
+  document.querySelectorAll(".flow").forEach(f=>{
+    // hide flow dots whose start chip is filtered out — approx by opacity
+    f.style.opacity=setk?0:.85;
+  });
+}));
+</script>

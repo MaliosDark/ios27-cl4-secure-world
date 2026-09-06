@@ -876,3 +876,23 @@ The user has the decrypted full rootfs: rootfs/24A5430a__iPhone17,3/decrypted/
   rootfs. This is the last blocker to a full-OS boot.
 Progress: full iOS now boots through SPTM/XNU to APFS mountroot on the lit panel; only the
 >4GB md0 ramdisk size stops the root mount.
+
+## UPDATE 28 — Two-front parallel + trustcache recon for the full OS
+Two agents running in parallel on the two blockers/opportunities:
+- md0-size: find the exact XNU 32-bit truncation of the RAMDisk/md0 size (likely an
+  `ldr w`/uint32 in the ramdisk-params reader before mdevadd) and the minimal widening
+  patch, so the 9.3GB rootfs mounts as root.
+- appledcp-crashA: find the AppleDCP secure/exclave-firmware branch that leaves its handler
+  table uninitialised (the garbage-callback panic at base-XNU 0xfffffff00ac9376c) and how
+  to flip it onto the normal-firmware path so AppleDCP boots the DCP over the ASC mailbox
+  ("[dcp] AFK INIT") -> real IOMFB surfaces.
+Recon of the NEXT blocker after md0 (trustcache/AMFI for the rootfs binaries):
+- No standalone trustcache in the rootfs folder, but the kernelcache carries STATIC TRUST
+  CACHES ("XNU Trust Caches", "number of static trust caches loaded", trust_cache_init) --
+  core OS binaries are covered.
+- Fallback exists: boot-arg cs_enforcement_disable ("cs_enforcement disabled by boot-arg")
+  + amfi_get_out_of_my_way, gated by "can't has cs_enforcement_disable" (dev-fused check).
+So once md0 mounts root, the full OS has a path to userspace via the static trust caches,
+with the cs_enforcement bypass boot-args as a fallback if AMFI rejects rootfs binaries.
+Full OS currently boots (dram-size fix) through SPTM/XNU to APFS mountroot on the lit
+panel; md0 >4GB is the immediate blocker.

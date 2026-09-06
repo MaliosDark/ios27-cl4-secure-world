@@ -521,3 +521,35 @@ transport handshake already exists; the IOMFB/EPIC + scanout piece is the domina
 and is REQUIRED BY EVERY route to pixels, so it is worth building now regardless.
 The CL4 research (UPDATES 3-11) is preserved: if we ever bring up the real secure world,
 the constructor-pass + handoff findings are the key.
+
+## UPDATE 12 — Path C ground truth + no boot-framebuffer shortcut
+Empirical state of the display path (baseline, NO -cl4, current bootkc has the
+secureproxy_v2 patch):
+- XNU boots to userspace: reaches launchd/dyld in the ramdisk ("hello from launchd.1",
+  "ignition sequence complete", "dyld[1] check_np errno 12"). 209 serial lines. So the
+  secureproxy_v2 patch already prevents the RTBuddy(DCP) route panic and the OS boots
+  HEADLESS.
+- RTBuddy(DCP)::start() and RTBuddy(ANS2)::start() both run, BUT the DCP ASC mailbox
+  (apple_rtkit "dcp" @0x412E00000 + apple_dcp) receives ZERO traffic: no [rtkit:dcp]/[dcp]
+  logs, XNU never writes CPU_CONTROL RUN. RTBuddy(DCP) is parked waiting on the secure
+  SecureRTBuddyDCP route (which secureproxy_v2 skips rather than satisfies), so it never
+  boots the DCP over the normal mailbox. The mailbox emulation is currently dead code.
+- Boot-framebuffer shortcut TESTED and does NOT work for iOS 27: `DARWIN_FB=1` carves a
+  640x1136 fb at 0x101ffd38000, publishes boot_args.Video (v_display=1, v_rowBytes) and
+  patches /vram reg in the DT exactly like iBoot -- but XNU writes NOTHING to it (fb RAM
+  0/4096 words non-zero; screendump blank). iOS 27 does not use the legacy boot_args.Video
+  framebuffer; the display comes ONLY through DCP. There is no simple-framebuffer path.
+=> The screen genuinely requires DCP. To light it via path C the concrete milestones are:
+   1. Make RTBuddy(DCP) actually boot the DCP over the ASC mailbox (so apple_dcp is
+      exercised). Options: (a) device-tree — turn iop-dcp-nub into a plain ASC-mailbox
+      RTKit endpoint (dt_fixup already strips its `routes`/secure-root-prefix, yet RTBuddy
+      still waited on the secure route, so DT alone was insufficient — investigate why);
+      (b) kernel-patch the DCP transport selection to use the mailbox.
+   2. Finish apple_dcp.c: map AFK rings at bfr_dva, implement IOMFB/EPIC RPC (mode-set /
+      surface-register / swap), publish DCPEndpoint24 -> AppleDCPLinkServiceSoC ->
+      IOMobileFramebuffer.
+   3. Scan out the fb to the DarwinFB console (already exists, darwin.c:245 init_framebuffer,
+      DARWIN_FB=1). This is the ChefKiss-t8030-scale piece and the dominant cost.
+HONEST STATUS: every route to actual pixels (full CL4+ExclaveOS, or DCP-mailbox bypass) is
+large; the DCP IOMFB emulation is unavoidable and common to all. CL4 now executes and the
+whole secure-world boot chain + DCP gate are mapped and preserved.

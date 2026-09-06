@@ -1118,7 +1118,7 @@ index 2a21540..0df6777 100644
  arm_common_ss.add(custom_target('apple_regs_autogen.h',
    output: 'apple_regs_autogen.h',
 diff --git a/hw/arm/xnuboot_sptm.c b/hw/arm/xnuboot_sptm.c
-index b96d421..957a710 100644
+index b96d421..24f9541 100644
 --- a/hw/arm/xnuboot_sptm.c
 +++ b/hw/arm/xnuboot_sptm.c
 @@ -86,6 +86,94 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
@@ -1316,11 +1316,11 @@ index b96d421..957a710 100644
 +            uint64_t domain_id = ds ? strtoull(ds, NULL, 0) : 0xc00000001ULL;
 +            address_space_write(&address_space_memory, cl4_dummy,
 +                                MEMTXATTRS_UNSPECIFIED, &domain_id, 8);
-+            g_cl4_x1_inject = getenv("CL4_NO_X1") ? 0 : cl4_dummy;
++            g_cl4_x1_inject = getenv("CL4_X1") ? cl4_dummy : 0;
 +            g_cl4_entry_pc  = cl4_rx_phys + (cl4_mi.entrypoint - cl4_mi.virtlo);
 +            // Install the ctor-runner trampoline and fill its literal pool, unless
 +            // disabled via CL4_NO_CTORS (to compare with the old x1-only probe).
-+            if (!getenv("CL4_NO_CTORS")) {
++            if (getenv("CL4_CTORS")) {   /* opt-in experimental ctor-runner (agent: wrong order; CL4 runs its own ctors after domain-setup) */
 +                hwaddr tramp_phys = cl4_dummy + 0x80;
 +                address_space_write(&address_space_memory, tramp_phys,
 +                                    MEMTXATTRS_UNSPECIFIED,

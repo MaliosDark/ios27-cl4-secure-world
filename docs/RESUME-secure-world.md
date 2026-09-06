@@ -702,3 +702,43 @@ it (past the "wait forever" gate). REMAINING to pixels: get AppleDCP's init to c
 unavoidable remaining cost (ChefKiss-t8030 scale).
 Reproduce: DARWIN_RTKIT=1 DARWIN_FB=1 qemu ... -bootkc firmware/bootkc.dcptest
   -dtree firmware/dtree_nr2 ...  (bootkc.dcptest = stock + blraa@0x3c8f7c4 -> mov x0,xzr)
+
+## UPDATE 18 — Ordering agent: ctor-runner was WRONG; real path-A mechanism is svc->SPTM
+Agent (cl4-ctor-ordering) findings:
+- CL4 entry 0xc00994f0 calls: early bring-up 0xc00a7b3c -> domain-setup 0xc00a6ea4 ->
+  main-init 0xc0098004. Domain-setup installs the REAL TPIDR_EL0 (setter 0xc00aa724 @
+  0xc00a7114) and registers base per-thread services (registrar 0xc00982e0 @ 0xc00a7178).
+  Environment-ready PC = 0xc0099738 (phys 0x1000691d738).
+- CL4 RUNS ITS OWN __mod_init_func ctors after domain-setup: wrapper 0xc015c3b4 -> runner
+  0xc015c03c -> iterator 0xc015c298 over [0xc0698fc0,0xc0699018), invoked from CL4's own
+  idempotent init 0xc0097e3c (done-flag @0xc06fecd8). So the entry-time ctor trampoline
+  (UPDATE 14-16) is REDUNDANT and INVERTS the order -> it is the wrong approach.
+- CL4 has NO exception vectors: raw-encoding scan finds ZERO msr vbar_el{1,2,3}, ZERO
+  eret/eretaa/eretab, ZERO mrs esr/far/elr/spsr_el1. Its 440 `svc #0..#5` are guarded
+  MONITOR CALLS to SPTM. The faulting `svc #0` (0xc009a9bc, in log primitive 0xc009a890)
+  emits a log record. In this qemu fork, guarded-EL1 sync exceptions vector to
+  env->vbar_gl[new_el] (helper.c ~9409) which is NEVER written -> 0 -> cascade. The
+  concrete missing mechanism: guarded-EL1 synchronous exceptions must escalate to SPTM's
+  monitor entry (gxf_entry_el[2], as EXCP_GENTER does at helper.c ~9561), OR trap-and-
+  emulate the svc in qemu.
+
+### Cleanup + clean baseline
+Gated the experimental ctor-runner + x1 injection to OPT-IN (CL4_CTORS=1 / CL4_X1=1);
+default `-cl4` is now the clean baseline. Clean baseline first fault: the ORIGINAL
+domain-descriptor null-deref at 0x1000691c528 (FAR 0, inside domain-setup 0x1000692aea4)
+-- object x23 is uninitialised. So domain-setup itself cannot complete because the object
+it reads (from the SPTM->SK handoff / an SPTM monitor call) is empty. This ties path A's
+two root needs together: (1) the correct SPTM->SK handoff so domain-setup's inputs are
+valid, and (2) guarded-svc->SPTM routing so CL4's monitor calls (which populate its state)
+actually reach SPTM. Both are deep, and a fully-booted CL4 still needs ExclaveOS for the
+DCP service. The ctor-runner code is kept (opt-in) as scaffolding for the eventual faithful
+loader emulation.
+
+### Definitive scope (both paths)
+PATH A (CL4 secure world): needs correct SPTM->SK handoff + guarded-svc->SPTM monitor-call
+routing (deep qemu + SPTM ABI) + CL4's full boot + ExclaveOS (164MB) for SecureRTBuddyDCP.
+PATH C (DCP bypass): DCP ASC-mailbox emulation is now LIVE (DARWIN_RTKIT=1); AppleDCP runs
+but has a chain of null-object derefs (its state globals uninitialised without the real DCP
+service) + needs the full IOMFB/EPIC RPC emulation + scanout (ChefKiss-t8030 scale).
+Both are large multi-session efforts. Everything mapped, activated where possible, and
+preserved. The pixels-on-screen goal requires completing one of these emulation efforts.

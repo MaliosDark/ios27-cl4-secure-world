@@ -1,0 +1,18 @@
+CÓMO VER LA PANTALLA DEL IPHONE
+================================
+La VM corre en tu Mac. Para ver el panel:
+
+1) VENTANA NATIVA (lo más simple):
+     cd /Users/maliosdark/darwin-vm && ./ver_pantalla.sh
+   -> se abre una ventana con el panel 640x1136 en vivo.
+
+2) POR VNC (para ver corridas en vivo / remoto):
+     cd /Users/maliosdark/darwin-vm && ./ver_en_vivo_vnc.sh
+   -> sirve en vnc://localhost:5900
+   -> en macOS: Finder -> Cmd+K -> vnc://localhost:5900  (Compartir Pantalla)
+
+3) OS COMPLETO (necesita tu rootfs en darwin-vm/rootfs/):
+     ./run_rootfs.sh
+
+Nota: el asistente corre headless (sin monitor) y captura la pantalla con
+screendump para mandártela como imagen. La ventana real se abre en TU Mac.

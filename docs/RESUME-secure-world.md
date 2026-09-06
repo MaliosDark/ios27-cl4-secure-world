@@ -298,3 +298,47 @@ x0=0x10006ff4370 has segment addrs at +0x20/+0x28/+0x30 = rx/rw/le and 0x10006f1
 at +0x18/+0x38). NEXT: trace 0x1000691e008 fully to see what it reads to build the
 global, and what should have set [x23+8]/[x23+0x18]. This is CL4 runtime init, one
 layer past domain registration.
+
+## UPDATE 6 — null deref pinned to MISSING boot-info tags 1 and 3
+The CL4 entrypoint builds a boot-info array of {tag,value} 16-byte entries at
+vmaddr 0xc06ff3f0 (= phys rx+0x6ff3f0 = 0x10006f833f0) from the registers SPTM
+passes at genter:
+  {0x15, 0}                        (hardcoded)
+  {0x1a, 0x1000691d4f0}            (hardcoded = CL4 entry)
+  {0x2,  <tag2 handoff ptr>}       (= x0 at entry; the SK handoff struct)
+  {0x3,  0}                        (= x1 at entry; SPTM passed x1 = 0)
+Parser 0x1000691e008 scatters each entry's value into a global config struct at
+0x10006f83000 via a jump table (0x1000691e2bc, indexed by tag-1). Decoded tag->field:
+  tag 1 -> +0x810   tag 2 -> +0x818   tag 3 -> +0x820   tag 0x15 -> +0x0b8
+  tag 0x1a -> +0x8e8  (…full map in session notes; tags 7,8,9,0xc,0xe..0x2d used)
+The faulting caller (0x1000692af9c..afb0):
+  x23 = &global+0x808;  x0 = [x23+8]  (= field 0x810 = tag 1);  cbnz x0, domain_lookup
+  else x0 = [x23+0x18]  (= field 0x820 = tag 3);  bl 0x1000691c528 (ldr x0,[x0])
+Field 0x810 (tag 1) = 0 because the entrypoint never emits tag 1. Field 0x820
+(tag 3) = 0 because SPTM passed x1 = 0. Both null -> ldr x0,[0] -> external abort
+(FAR 0, MMU-off phys 0). CL4 expects tag 1 (and/or tag 3) to be a valid pointer.
+
+tag2 handoff dump @0x10007090370 (contiguous run):
+  +0x00 0x10000000000  +0x08 0x200000000  +0x10 0x10016adc000
+  +0x18 0x10006f10000(=__DATA)  +0x20 0x10006884000(=__TEXT)  +0x28 0x10006f10000
+  +0x30 0x10006f98000(=__LINKEDIT)  +0x38 0x10006fac000(end)  +0x40 0x53e78
+  +0x48 0x10007090bcc   (rest ZERO)
+So the handoff carries CL4's segment map but NOT whatever tag 1 / tag 3 should
+point at (a domain descriptor / boot manifest). This is the SPTM->SK handoff being
+incomplete for our synthesized boot.
+
+### ACTIONABLE next steps
+  1. Identify what tag 1 and tag 3 point to on real HW (what struct CL4 derefs at
+     [x23+8]/[x23+0x18] after the cbnz). Disassemble the domain_lookup path
+     (0x1000691eba0 onward) and the code after 0x1000691c528's caller to see how the
+     pointer is consumed -> reveals the expected struct layout.
+  2. Find where SPTM sources x0/x1 for the SK genter (reverse the SPTM binary's SK
+     bootstrap) OR synthesize a valid tag1/tag3 structure in guest memory and make
+     the loader/handoff point CL4 at it.
+  3. Simplest experiment to advance one more step: allocate a small zeroed struct,
+     set tag 3's value (SPTM x1, or patch the boot-info array post-build) to point at
+     it, and see what field CL4 derefs next -> iteratively learn the struct.
+STATUS: CL4 boots through entry, early init, SIMD memcmp, handoff parse, and domain
+descriptor lookup; blocks on the SPTM->SK handoff missing tag1/tag3. Every fix this
+session moved CL4 strictly forward. The remaining work is reconstructing the SK
+handoff, not fighting the CPU/loader anymore.

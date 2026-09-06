@@ -666,3 +666,39 @@ sequence (register base services + install vectors + run ctors + domain-setup), 
 a fully-booted CL4 needs ExclaveOS for the DCP service. Path C (DCP bypass) remains the
 pragmatic route to pixels. The ctor-runner + seed work is preserved and is the correct
 mechanism for the eventual full loader emulation.
+
+## UPDATE 17 — Path C: DCP MAILBOX EMULATION ACTIVATED (key discovery)
+The DCP mailbox emulation (apple_rtkit/apple_dcp) is gated behind DARWIN_RTKIT=1
+(darwin.c:1260 init_rtkit_dcp) -- previously never enabled, which is why the mailbox
+saw no traffic. Enabling it:
+  DARWIN_RTKIT=1 DARWIN_FB=1  -> "[rtkit:dcp] mailbox 0x412e00000 + 0x88000",
+  "[dcp] AFK endpoints 0x23/0x24/0x25, 640x1136 fb at 0x101ffd38000" (fb real).
+Other display knobs: DARWIN_DISP=all (maps disp0/dcp/dcp0-expert register stubs),
+DARWIN_DART, DARWIN_PMGR, DARWIN_DCPFW (loads firmware/dcpfw). NOTE: DARWIN_DISP=all +
+DART + PMGR together broke very early boot (29 lines) -- add stubs selectively.
+Device-tree variant selection matters (checked all firmware/dtree*):
+  - iop-dcp-nub routes / no-firmware-service:
+    dtree_norm: routes=OFF, no-fw-svc=OFF  (drops both -> far=0xb1 no-firmware path)
+    dtree_nr:   routes=OFF, no-fw-svc=OFF
+    dtree_nr2:  routes=OFF, no-fw-svc=ON   <-- the one to use (no secure wait, keeps
+                the firmware-service property)
+Progression with DARWIN_RTKIT=1 DARWIN_FB=1:
+  - dtree_nr2 + stock bootkc: 409 lines, then the AppleDCP callback-dispatch crash
+    (blraa x8,#0xba5 through a garbage PAC callback at 0xfffffff00ac937c4).
+  - + bootkc.dcptest (patched that blraa -> `mov x0,xzr`, file off 0x3c8f7c4): no more
+    callback crash; next panic far=0xb1 at 0xfffffff00ac6e104:
+      ldr x8,[global 0xfffffff00b6c08b8]  (x8 = DCP state object; it is NULL)
+      stur d0,[x8, #0xb1]                 -> store to [NULL+0xb1] = far 0xb1.
+So AppleDCP's state globals (e.g. 0xfffffff00b6c08b8) are never initialised because the
+secure-world DCP service that would build them is absent. This is the chain of AppleDCP
+null-derefs (agent C step 3). Patching each store-to-null individually is wrong (it
+corrupts state); the correct fix is to provide a valid DCP state object / faithfully
+emulate AppleDCP's init, OR load DARWIN_DCPFW and let the real init run. 
+MILESTONE achieved: the DCP ASC-mailbox emulation is live and AppleDCP now runs against
+it (past the "wait forever" gate). REMAINING to pixels: get AppleDCP's init to complete
+(provide/emulate its state + DCP firmware handshake) so it writes CPU_CONTROL RUN ->
+[rtkit:dcp] HELLO handshake -> AFK ring INIT -> IOMFB/EPIC RPC (mode-set/surface/swap)
+-> scan out the surface to the DARWIN_FB console. This IOMFB emulation is the dominant,
+unavoidable remaining cost (ChefKiss-t8030 scale).
+Reproduce: DARWIN_RTKIT=1 DARWIN_FB=1 qemu ... -bootkc firmware/bootkc.dcptest
+  -dtree firmware/dtree_nr2 ...  (bootkc.dcptest = stock + blraa@0x3c8f7c4 -> mov x0,xzr)

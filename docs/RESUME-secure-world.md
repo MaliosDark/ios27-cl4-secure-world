@@ -788,3 +788,19 @@ label "KERNEL PANIC -- ver consola". Added a soft edge vignette so the panel rea
 glass. Normal boot (dtree_dbg) shows the green ring at 100% "iOS en marcha" with the real
 libignition/launchd sequence (hello from launchd.1, ignition sequence complete).
 shots/panel-boot-polished.png.
+
+## UPDATE 22 — Interactive panel: keyboard -> guest UART wired
+Wired the display window's keyboard to the guest so you can type on the panel:
+- hw/char/exynos4210_uart.c: darwin_uart_inject(buf,len) pushes bytes into the UART RX
+  FIFO via exynos4210_uart_receive; g_darwin_uart captured in exynos4210_uart_create.
+- hw/arm/darwin.c: a QemuInputHandler (darwin_kbd_handler) registered+activated in
+  init_framebuffer maps QKeyCode->ASCII (letters/digits/symbols with shift, RET='\r',
+  BACKSPACE=0x7f, ESC, and ctrl-<letter> control codes) and injects to the UART. So the
+  QEMU window's keyboard (or QMP send-key) reaches the guest console. Printed
+  "keyboard -> UART live".
+VERIFIED the wiring: QMP send-key delivers to our handler and into the UART. BUT the
+restore ramdisk runs launchd boot-tasks and finishes (finish-restore) with NO interactive
+shell/getty on the console, so there is nothing guest-side to echo/receive input yet -- an
+interactive shell needs the full OS (or a shell-enabled boot), same limitation as the
+graphical UI. The panel is now interactive-CAPABLE end-to-end; it becomes usable the
+moment the guest presents a console.

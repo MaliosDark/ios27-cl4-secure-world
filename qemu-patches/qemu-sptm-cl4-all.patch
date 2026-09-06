@@ -53,14 +53,15 @@ index 35c4460..b1ae9c5 100644
      // CTXR region C: [TXM-rx, TXM-bx]
      APPLE_STATE(env)->acc_ctxr_c_lwr_el2 = REGION_START("TXM-rx");
 diff --git a/hw/arm/darwin.c b/hw/arm/darwin.c
-index 51d240b..425ff66 100644
+index 51d240b..48121c6 100644
 --- a/hw/arm/darwin.c
 +++ b/hw/arm/darwin.c
-@@ -21,6 +21,14 @@
+@@ -21,6 +21,15 @@
  #include "hw/arm/apple_amcc.h"
  #include "xnu/patch.h"
  #include "xnu/macho.h"
 +#include "ui/console.h"
++#include "ui/input.h"
 +#include "ui/surface.h"
 +#include "hw/misc/unimp.h"
 +#include "hw/core/irq.h"
@@ -71,7 +72,7 @@ index 51d240b..425ff66 100644
  
  // See device tree specification section 2.3.8: ranges
  #define IO_RANGE_BASE_OFFSET     1
-@@ -30,6 +38,11 @@
+@@ -30,6 +39,11 @@
  
  #define EXPECTED_FIRMWARE_NAME   "qemu-sptm"
  
@@ -83,7 +84,7 @@ index 51d240b..425ff66 100644
  static char *g_default_args = (char*)"debug=0x8 kextlog=0xffff cpus=1 rd=md0 serial=7 -v -noprogress keepsyms=1 wdt=-1 -enable_kprintf_spam wlan-olyhal-abort";
  
  #define CPACR_ENABLE_FPU         (( BIT(20) | BIT(21) ))
-@@ -49,6 +62,7 @@ MACHINE_CLASS_ARG(args);
+@@ -49,6 +63,7 @@ MACHINE_CLASS_ARG(args);
  MACHINE_CLASS_ARG(dtree);
  MACHINE_CLASS_ARG(sptm);
  MACHINE_CLASS_ARG(txm);
@@ -91,7 +92,7 @@ index 51d240b..425ff66 100644
  MACHINE_CLASS_ARG(tc);
  MACHINE_CLASS_ARG(ramdisk);
  
-@@ -211,6 +225,921 @@ static void check_dtree(struct dtree_node *dt_root) {
+@@ -211,6 +226,1009 @@ static void check_dtree(struct dtree_node *dt_root) {
      }
  }
  
@@ -112,6 +113,90 @@ index 51d240b..425ff66 100644
 +// Scan out the pixels the kernel loader reserved for us. The surface points
 +// straight at guest DRAM, so whatever XNU draws lands in the window with no
 +// copy of our own.
++extern void darwin_uart_inject(const uint8_t *buf, int len);
++
++static bool g_kbd_shift, g_kbd_ctrl;
++
++static char qcode_to_ascii(int q, bool sh)
++{
++    switch (q) {
++    case Q_KEY_CODE_A: return sh ? 'A' : 'a';
++    case Q_KEY_CODE_B: return sh ? 'B' : 'b';
++    case Q_KEY_CODE_C: return sh ? 'C' : 'c';
++    case Q_KEY_CODE_D: return sh ? 'D' : 'd';
++    case Q_KEY_CODE_E: return sh ? 'E' : 'e';
++    case Q_KEY_CODE_F: return sh ? 'F' : 'f';
++    case Q_KEY_CODE_G: return sh ? 'G' : 'g';
++    case Q_KEY_CODE_H: return sh ? 'H' : 'h';
++    case Q_KEY_CODE_I: return sh ? 'I' : 'i';
++    case Q_KEY_CODE_J: return sh ? 'J' : 'j';
++    case Q_KEY_CODE_K: return sh ? 'K' : 'k';
++    case Q_KEY_CODE_L: return sh ? 'L' : 'l';
++    case Q_KEY_CODE_M: return sh ? 'M' : 'm';
++    case Q_KEY_CODE_N: return sh ? 'N' : 'n';
++    case Q_KEY_CODE_O: return sh ? 'O' : 'o';
++    case Q_KEY_CODE_P: return sh ? 'P' : 'p';
++    case Q_KEY_CODE_Q: return sh ? 'Q' : 'q';
++    case Q_KEY_CODE_R: return sh ? 'R' : 'r';
++    case Q_KEY_CODE_S: return sh ? 'S' : 's';
++    case Q_KEY_CODE_T: return sh ? 'T' : 't';
++    case Q_KEY_CODE_U: return sh ? 'U' : 'u';
++    case Q_KEY_CODE_V: return sh ? 'V' : 'v';
++    case Q_KEY_CODE_W: return sh ? 'W' : 'w';
++    case Q_KEY_CODE_X: return sh ? 'X' : 'x';
++    case Q_KEY_CODE_Y: return sh ? 'Y' : 'y';
++    case Q_KEY_CODE_Z: return sh ? 'Z' : 'z';
++    case Q_KEY_CODE_0: return sh ? ')' : '0';
++    case Q_KEY_CODE_1: return sh ? '!' : '1';
++    case Q_KEY_CODE_2: return sh ? '@' : '2';
++    case Q_KEY_CODE_3: return sh ? '#' : '3';
++    case Q_KEY_CODE_4: return sh ? '$' : '4';
++    case Q_KEY_CODE_5: return sh ? '%' : '5';
++    case Q_KEY_CODE_6: return sh ? '^' : '6';
++    case Q_KEY_CODE_7: return sh ? '&' : '7';
++    case Q_KEY_CODE_8: return sh ? '*' : '8';
++    case Q_KEY_CODE_9: return sh ? '(' : '9';
++    case Q_KEY_CODE_SPC: return ' ';
++    case Q_KEY_CODE_RET: return '\r';
++    case Q_KEY_CODE_TAB: return '\t';
++    case Q_KEY_CODE_BACKSPACE: return 0x7f;
++    case Q_KEY_CODE_ESC: return 0x1b;
++    case Q_KEY_CODE_MINUS: return sh ? '_' : '-';
++    case Q_KEY_CODE_EQUAL: return sh ? '+' : '=';
++    case Q_KEY_CODE_BRACKET_LEFT: return sh ? '{' : '[';
++    case Q_KEY_CODE_BRACKET_RIGHT: return sh ? '}' : ']';
++    case Q_KEY_CODE_BACKSLASH: return sh ? '|' : '\\';
++    case Q_KEY_CODE_SEMICOLON: return sh ? ':' : ';';
++    case Q_KEY_CODE_APOSTROPHE: return sh ? '"' : '\'';
++    case Q_KEY_CODE_GRAVE_ACCENT: return sh ? '~' : '`';
++    case Q_KEY_CODE_COMMA: return sh ? '<' : ',';
++    case Q_KEY_CODE_DOT: return sh ? '>' : '.';
++    case Q_KEY_CODE_SLASH: return sh ? '?' : '/';
++    default: return 0;
++    }
++}
++
++static void darwin_kbd_event(DeviceState *dev, QemuConsole *src, QemuInputEvent *evt)
++{
++    if (evt->type != INPUT_EVENT_KIND_KEY) return;
++    int q = evt->key.key;          /* already a QKeyCode */
++    bool down = evt->key.down;
++    if (q == Q_KEY_CODE_SHIFT || q == Q_KEY_CODE_SHIFT_R) { g_kbd_shift = down; return; }
++    if (q == Q_KEY_CODE_CTRL || q == Q_KEY_CODE_CTRL_R)   { g_kbd_ctrl  = down; return; }
++    if (!down) return;
++    char c = qcode_to_ascii(q, g_kbd_shift);
++    if (!c) return;
++    if (g_kbd_ctrl) { if (c >= 'a' && c <= 'z') c = c - 'a' + 1; else if (c >= 'A' && c <= 'Z') c = c - 'A' + 1; }
++    uint8_t b = (uint8_t)c;
++    darwin_uart_inject(&b, 1);
++}
++
++static const QemuInputHandler darwin_kbd_handler = {
++    .name  = "iPhone panel keyboard",
++    .mask  = INPUT_EVENT_MASK_KEY,
++    .event = darwin_kbd_event,
++};
++
 +static void init_framebuffer(struct xnu_boot_info *info) {
 +    if (!info->fb_size) return;
 +
@@ -131,7 +216,11 @@ index 51d240b..425ff66 100644
 +        qemu_create_displaysurface_from(info->fb_width, info->fb_height,
 +                                        PIXMAN_x8r8g8b8, info->fb_width * 4, ptr));
 +
-+    printf("[darwin] boot framebuffer: %ux%u @ 0x%" HWADDR_PRIx "\n",
++    /* Route the display window's keyboard to the guest UART: type on the panel. */
++    QemuInputHandlerState *ihs = qemu_input_handler_register(NULL, &darwin_kbd_handler);
++    qemu_input_handler_activate(ihs);
++
++    printf("[darwin] boot framebuffer: %ux%u @ 0x%" HWADDR_PRIx " (keyboard -> UART live)\n",
 +           info->fb_width, info->fb_height, info->fb_base);
 +    fflush(stdout);
 +}
@@ -1013,7 +1102,7 @@ index 51d240b..425ff66 100644
  static void darwin_init(MachineState *ms) {
      DarwinState *s = DARWIN_MACHINE(ms);
      struct xnu_boot_info *info = &s->bootinfo;
-@@ -221,6 +1150,12 @@ static void darwin_init(MachineState *ms) {
+@@ -221,6 +1239,12 @@ static void darwin_init(MachineState *ms) {
      info->dtree_f = check_and_open(info->dtree, "error opening device tree");
      info->tc_f = check_and_open(info->tc, "error opening trust cache");
      info->ramdisk_f = check_and_open(info->ramdisk, "error opening ramdisk");
@@ -1026,7 +1115,7 @@ index 51d240b..425ff66 100644
      if (info->sptm) {
          info->sptm_f = check_and_open(info->sptm, "error opening SPTM");
          info->txm_f = check_and_open(info->txm, "error opening TXM");
-@@ -255,8 +1190,38 @@ static void darwin_init(MachineState *ms) {
+@@ -255,8 +1279,38 @@ static void darwin_init(MachineState *ms) {
      info->dram_base = *(u64*)adt_get_prop_val(chosen_node, "dram-base");
      info->dram_size = *(u64*)adt_get_prop_val(chosen_node, "dram-size");
  
@@ -1065,7 +1154,7 @@ index 51d240b..425ff66 100644
      if (info->has_mte) setup_mte(cpuobj, MACHINE(s), info);
  
      struct dtree_node *amcc_node = adt_find_node(dt_root, "chosen/lock-regs/amcc");
-@@ -272,7 +1237,29 @@ static void darwin_init(MachineState *ms) {
+@@ -272,7 +1326,29 @@ static void darwin_init(MachineState *ms) {
      assert(0 == arm_io_ranges[0]); // child bus phys addr must be zero
  
      init_uart(dt_root, iobase);
@@ -1096,7 +1185,7 @@ index 51d240b..425ff66 100644
      init_sep(dt_root);
      init_cpu_impl(dt_root);
  
-@@ -311,6 +1298,7 @@ static void darwin_machine_class_init(ObjectClass *oc, const void *data) {
+@@ -311,6 +1387,7 @@ static void darwin_machine_class_init(ObjectClass *oc, const void *data) {
      object_class_property_add_str(oc, "dtree", dtree_darwin_class_get, dtree_darwin_class_set);
      object_class_property_add_str(oc, "sptm", sptm_darwin_class_get, sptm_darwin_class_set);
      object_class_property_add_str(oc, "txm", txm_darwin_class_get, txm_darwin_class_set);
@@ -1519,7 +1608,7 @@ index b96d421..24f9541 100644
      uint64_t sptm_load = args.virtBase - args.physBase + sptm_mi.physlo;
      uint64_t txm_load = sptm_load + 1 * SPTM_EXPECTED_STRIDE;
 diff --git a/hw/char/exynos4210_uart.c b/hw/char/exynos4210_uart.c
-index 46fc4e3..06c000a 100644
+index 46fc4e3..56dd0b9 100644
 --- a/hw/char/exynos4210_uart.c
 +++ b/hw/char/exynos4210_uart.c
 @@ -20,6 +20,7 @@
@@ -1538,6 +1627,37 @@ index 46fc4e3..06c000a 100644
              trace_exynos_uart_tx(s->channel, ch);
              s->reg[I_(UTRSTAT)] |= UTRSTAT_TRANSMITTER_EMPTY |
                      UTRSTAT_Tx_BUFFER_EMPTY;
+@@ -561,6 +563,8 @@ static int exynos4210_uart_can_receive(void *opaque)
+     }
+ }
+ 
++static Exynos4210UartState *g_darwin_uart;
++
+ static void exynos4210_uart_receive(void *opaque, const uint8_t *buf, int size)
+ {
+     Exynos4210UartState *s = (Exynos4210UartState *)opaque;
+@@ -650,6 +654,13 @@ static const VMStateDescription vmstate_exynos4210_uart = {
+     }
+ };
+ 
++/* Inject keystrokes from the on-panel keyboard into the guest's UART RX. */
++void darwin_uart_inject(const uint8_t *buf, int len);
++void darwin_uart_inject(const uint8_t *buf, int len)
++{
++    if (g_darwin_uart) exynos4210_uart_receive(g_darwin_uart, buf, len);
++}
++
+ DeviceState *exynos4210_uart_create(hwaddr addr,
+                                     int fifo_size,
+                                     int channel,
+@@ -668,6 +679,7 @@ DeviceState *exynos4210_uart_create(hwaddr addr,
+ 
+     bus = SYS_BUS_DEVICE(dev);
+     sysbus_realize_and_unref(bus, &error_fatal);
++    g_darwin_uart = EXYNOS4210_UART(dev);   /* for on-panel keyboard injection */
+     if (addr != (hwaddr)-1) {
+         sysbus_mmio_map(bus, 0, addr);
+     }
 diff --git a/include/xnu/boot/xnuboot.h b/include/xnu/boot/xnuboot.h
 index 2c4c01e..b689d6c 100644
 --- a/include/xnu/boot/xnuboot.h

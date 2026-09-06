@@ -163,9 +163,9 @@
     <div class="block">
       <h3>La frontera — lo que falta para los píxeles</h3>
       <div class="front">
-        <span class="tag c-missing">Ruta bypass (DCP) · la más corta a píxeles</span>
-        <h4>Emular el controlador de display IOMFB</h4>
-        <p>El mailbox del DCP ya responde. Falta resolver los null-derefs de AppleDCP y construir el protocolo <code>IOMFB/EPIC</code> (mode-set · superficies · swap) y el scanout al framebuffer. Es el grueso del trabajo — escala ChefKiss-t8030.</p>
+        <span class="tag c-ok">Panel encendido ✓ · falta la UI gráfica</span>
+        <h4>Superficies reales del guest (IOMFB)</h4>
+        <p>El panel YA enciende y muestra el boot log real de iOS (scanout completo). Para la UI gráfica falta que el guest entregue superficies vía <code>IOMFB/EPIC</code> — y correr el OS completo, no el ramdisk. Es el último tramo.</p>
       </div>
       <div class="front">
         <span class="tag c-blocked">Ruta segura (CL4)</span>
@@ -240,16 +240,16 @@ const C = {
     role:"La capa que recibe superficies del driver y las manda al DCP para mostrarlas.",
     blurb:"No construida. Es el costo dominante — el protocolo real del display.",
     done:[],todo:["Construir el RPC EPIC completo","Registro de superficies + swaps"]},
-  dfb:{name:"DarwinFB",sub:"consola de QEMU",st:"ready",x:958,y:300,w:140,h:86,
+  dfb:{name:"DarwinFB",sub:"consola de QEMU",st:"ok",x:958,y:300,w:140,h:86,
     role:"El framebuffer de salida: una consola gráfica de QEMU sobre RAM real.",
     blurb:"LISTA y esperando píxeles. Cuando el DCP entregue una superficie, acá se ve.",
     done:["fb 640×1136 asignado (DARWIN_FB=1)","boot_args.Video + /vram publicados","Consola gráfica creada"],
     todo:["Recibir el scanout desde apple_dcp"]},
   screen:{name:"PANTALLA",sub:"el objetivo",st:"phos",x:1140,y:150,w:112,h:396,
     role:"La pantalla del iPhone. El objetivo de todo el aparato.",
-    blurb:"Aún oscura. La mitad del pipeline (framebuffer→consola) está lista; falta el DCP/IOMFB que la alimenta.",
-    done:["Camino completo mapeado de punta a punta"],
-    todo:["Falta que el DCP entregue el primer frame"]}
+    blurb:"ENCENDIDA. Nuestro DCP maneja el panel y muestra el boot log REAL de iOS 27 (640×1136).",
+    done:["Panel manejado por el DCP emulado","Scanout DCP→framebuffer→consola completo","Log real de iOS renderizado en el panel"],
+    todo:["Para la UI gráfica de iOS: superficies IOMFB del OS completo (no ramdisk)"]}
 };
 
 const T = [
@@ -266,9 +266,9 @@ const T = [
   ["rtbuddy","r","mbox","l","partial","DARWIN_RTKIT"],
   ["appledcp","r","mbox","l","partial"],
   ["mbox","b","iomfb","t","missing"],
-  ["mbox","r","dfb","l","missing","scanout"],
+  ["mbox","r","dfb","l","ok","scanout vivo"],
   ["iomfb","r","dfb","l","missing"],
-  ["dfb","r","screen","l","ready"]
+  ["dfb","r","screen","l","ok"]
 ];
 
 const MILES = [
@@ -277,7 +277,8 @@ const MILES = [
   ["03","ctor-runner","Los 11 constructores de CL4 corren"],
   ["04","DARWIN_RTKIT=1","El mailbox DCP emulado se enciende — antes dormido"],
   ["05","dtree_nr2","RTBuddy(DCP) suelta la ruta segura y usa el mailbox"],
-  ["06","AppleDCP arranca","El driver de display ejecuta su init contra el mailbox"]
+  ["06","AppleDCP arranca","El driver de display ejecuta su init contra el mailbox"],
+  ["07","PANTALLA ENCENDIDA","Nuestro DCP pinta el boot log real de iOS en el panel — scanout completo"]
 ];
 
 const COL = {ok:getcol("--ok"),partial:getcol("--partial"),blocked:getcol("--blocked"),missing:getcol("--missing"),ready:getcol("--phos"),phos:getcol("--phos")};
@@ -344,7 +345,7 @@ function drawChip(id){
   if(isScreen){
     for(let i=0;i<9;i++)g.appendChild(el("line",{x1:c.x+10,y1:c.y+70+i*36,x2:c.x+c.w-10,y2:c.y+70+i*36,stroke:"#0d2620","stroke-width":1}));
     const no=el("text",{x:c.x+c.w/2,y:c.y+c.h/2+30,"text-anchor":"middle","font-size":"10","font-family":"IBM Plex Mono",fill:"#2f5c52","letter-spacing":".2em"});
-    no.textContent="SIN SEÑAL";g.appendChild(no);
+    no.textContent="iOS · LIVE";no.setAttribute("fill","#33e0b8");g.appendChild(no);
   }
   g.addEventListener("click",()=>select(id));
   g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();select(id)}});

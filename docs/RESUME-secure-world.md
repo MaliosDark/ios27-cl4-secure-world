@@ -637,3 +637,32 @@ Then AppleDCP proceeds toward writing CPU_CONTROL RUN to the ASC mailbox (apple_
 after which the IOMFB/EPIC RPC layer must be built. This is the dominant remaining cost.
 Two fronts now run in parallel: path C (this) foreground; path A per-thread registry
 (the (2,5) factory) via a background agent.
+
+## UPDATE 16 — ctor-runner + registry seed: advances through TPIDR/TPIDRRO/(2,5)/SVC
+Applied the per-thread-registry agent's findings + fallback seed. Progression of the
+CL4 ctor-pass frontier (each fix advances to the next, whack-a-mole as predicted):
+- msr tpidr_el0,xzr in trampoline tail (so CL4's domain-setup takes its tpidr==0 build
+  path) -- NOT sufficient alone: a CONSTRUCTOR calls the (2,5) accessor DURING the ctor
+  pass (SP in the trampoline scratch stack), before domain-setup (0xc00a6ea4) ever runs.
+  Confirmed domain-setup 0x1000692aea4 never executes (0 hits) -- the ctor faults first.
+  So the base per-thread services must be present BEFORE the ctors (real HW: SPTM's
+  loader registers them before running __mod_init_func).
+- Pre-seeded the fake per-thread context's list with node (2,5)->value=rx+0x6fece8
+  (loader writes ctx+0x10->regobj->node{next=0,key1=2,key2=5,value}). => (2,5) fault
+  GONE. Next fault: 0x1000691e8e8 `mrs x23,tpidrro_el0; ldrb w8,[x23,#9]` -- TPIDRRO_EL0
+  (the READ-ONLY per-thread reg) is also 0.
+- Set TPIDRRO_EL0 = a zeroed scratch region at divert (cp15.tpidrro_el[0]). => that fault
+  GONE. Next: exception 2 [SVC] at 0x1000691e9c0 -- a constructor executes `svc` (an
+  intra-kernel/secure syscall), but VBAR_EL1 is 0 (CL4's exception vectors not installed
+  yet), so it vectors to 0x200 and cascades.
+INTERPRETATION: the constructors expect the FULL pre-ctor environment the SPTM exclave
+loader sets up before calling __mod_init_func: TPIDR_EL0 + TPIDRRO_EL0 + a populated base
+per-thread registry + installed EL1 exception vectors (VBAR) to service the ctor's SVC.
+We are reconstructing that environment piece by piece (open-ended). The SVC is a bigger
+step (needs CL4's vector table / syscall dispatch, normally installed during early init).
+State knobs added: CL4_NO_CTORS (disable ctor-runner), CL4_NO_X1 (disable x1 probe).
+CONCLUSION (reinforced): the root unblock for path A is reproducing the SPTM->SK loader
+sequence (register base services + install vectors + run ctors + domain-setup), and even
+a fully-booted CL4 needs ExclaveOS for the DCP service. Path C (DCP bypass) remains the
+pragmatic route to pixels. The ctor-runner + seed work is preserved and is the correct
+mechanism for the eventual full loader emulation.

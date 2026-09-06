@@ -1118,10 +1118,10 @@ index 2a21540..0df6777 100644
  arm_common_ss.add(custom_target('apple_regs_autogen.h',
    output: 'apple_regs_autogen.h',
 diff --git a/hw/arm/xnuboot_sptm.c b/hw/arm/xnuboot_sptm.c
-index b96d421..22e8335 100644
+index b96d421..957a710 100644
 --- a/hw/arm/xnuboot_sptm.c
 +++ b/hw/arm/xnuboot_sptm.c
-@@ -86,6 +86,93 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
+@@ -86,6 +86,94 @@ static hwaddr get_seglen(macho_info_t *mi, const char *segname) {
      return 0;
  }
  
@@ -1148,13 +1148,14 @@ index b96d421..22e8335 100644
 +uint64_t g_cl4_tramp_pc = 0;
 +int      g_cl4_ctors_done = 0;
 +uint64_t g_cl4_tpidr = 0;   /* fake empty per-thread context for the ctor run */
++uint64_t g_cl4_tpidrro = 0; /* fake read-only per-thread context (TPIDRRO_EL0) */
 +static const uint8_t cl4_ctor_trampoline[] = {
 +    0xf3, 0x03, 0x00, 0xaa, 0xf4, 0x03, 0x01, 0xaa, 0x15, 0x02, 0x00, 0x58,
 +    0x36, 0x02, 0x00, 0x58, 0x49, 0x02, 0x00, 0x58, 0x3f, 0x01, 0x00, 0x91,
 +    0xbf, 0x02, 0x16, 0xeb, 0x82, 0x00, 0x00, 0x54, 0xb7, 0x86, 0x40, 0xf8,
 +    0xe0, 0x02, 0x3f, 0xd6, 0xfc, 0xff, 0xff, 0x17, 0xe0, 0x03, 0x13, 0xaa,
 +    0xe1, 0x03, 0x14, 0xaa, 0xe9, 0x03, 0x1f, 0xaa, 0x3f, 0x01, 0x00, 0x91,
-+    0x30, 0x01, 0x00, 0x58, 0x00, 0x02, 0x1f, 0xd6, 0x1f, 0x20, 0x03, 0xd5,
++    0x30, 0x01, 0x00, 0x58, 0x5f, 0xd0, 0x1b, 0xd5, 0x00, 0x02, 0x1f, 0xd6,
 +    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 +    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 +    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1215,7 +1216,7 @@ index b96d421..22e8335 100644
  static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_info *info) {
      u8 *dtree = (u8*)info->dtree_f.buf;
      u8 *macho_sptm = (u8*)info->sptm_f.buf;
-@@ -97,11 +184,19 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -97,11 +185,19 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      macho_info_t bkc_mi  = macho_get_info(macho_bkc);
      macho_info_t txm_mi  = macho_get_info(macho_txm);
      macho_info_t sptm_mi = macho_get_info(macho_sptm);
@@ -1235,7 +1236,7 @@ index b96d421..22e8335 100644
  
      hwaddr tc_size_rounded = ROUND_NEXT_PAGE(sizeof(trust_cache_offsets_t) + info->tc_f.len);
      hwaddr dtree_size_rounded = ROUND_NEXT_PAGE(info->dtree_f.len);
-@@ -173,6 +268,7 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -173,6 +269,7 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          SEGLEN(bkc, "__DATA_SPTM") +
          dtree_size_rounded +
          tc_size_rounded +
@@ -1243,7 +1244,7 @@ index b96d421..22e8335 100644
          DARWIN_PAGE_SIZE; // extra page we skip in front of the device tree
  
      assert(GET_L2_PT_INDEX(bkc_mi.virtlo) > bytes_before_sptm);
-@@ -238,7 +334,38 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -238,7 +335,38 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          END_ENTRY("BootKC-rs");
      }
  
@@ -1283,7 +1284,7 @@ index b96d421..22e8335 100644
  
      // DeviceTree
      {
-@@ -316,12 +443,76 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -316,12 +444,98 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      {
          PUSH_SEG(bkc, "__LINKEDIT");
          END_ENTRY("BootKC-le");
@@ -1315,7 +1316,7 @@ index b96d421..22e8335 100644
 +            uint64_t domain_id = ds ? strtoull(ds, NULL, 0) : 0xc00000001ULL;
 +            address_space_write(&address_space_memory, cl4_dummy,
 +                                MEMTXATTRS_UNSPECIFIED, &domain_id, 8);
-+            g_cl4_x1_inject = cl4_dummy;
++            g_cl4_x1_inject = getenv("CL4_NO_X1") ? 0 : cl4_dummy;
 +            g_cl4_entry_pc  = cl4_rx_phys + (cl4_mi.entrypoint - cl4_mi.virtlo);
 +            // Install the ctor-runner trampoline and fill its literal pool, unless
 +            // disabled via CL4_NO_CTORS (to compare with the old x1-only probe).
@@ -1342,13 +1343,35 @@ index b96d421..22e8335 100644
 +                // cell @ +0x400 (empty list head = 0). CL4 installs its real
 +                // TPIDR at 0xc00aa724 later and overwrites this.
 +                {
-+                    hwaddr ctx = cl4_dummy + 0x200;
-+                    hwaddr cell = cl4_dummy + 0x400;
++                    // Fake per-thread ctx @ +0x200. [ctx+8] -> zeroed cell (an
++                    // accessor returns it). [ctx+0x10] -> regobj @ +0x400 whose
++                    // [0] is the singly-linked list head. Pre-seed the base
++                    // per-thread services CL4's domain-setup would register, so
++                    // constructors that look them up during the ctor pass (before
++                    // domain-setup runs) find them instead of dereferencing null.
++                    hwaddr ctx    = cl4_dummy + 0x200;
++                    hwaddr cell8  = cl4_dummy + 0x600;
++                    hwaddr regobj = cl4_dummy + 0x400;
++                    hwaddr node   = cl4_dummy + 0x420;
 +                    address_space_write(&address_space_memory, ctx + 0x08,
-+                                        MEMTXATTRS_UNSPECIFIED, &cell, 8);
++                                        MEMTXATTRS_UNSPECIFIED, &cell8, 8);
 +                    address_space_write(&address_space_memory, ctx + 0x10,
-+                                        MEMTXATTRS_UNSPECIFIED, &cell, 8);
++                                        MEMTXATTRS_UNSPECIFIED, &regobj, 8);
++                    address_space_write(&address_space_memory, regobj,
++                                        MEMTXATTRS_UNSPECIFIED, &node, 8);
++                    // node (2,5): next=0, key1=2, key2=5, value=rx+0x6fece8
++                    uint64_t nxt = 0, val = cl4_rx_phys + 0x6fece8;
++                    uint32_t k1 = 2, k2 = 5;
++                    address_space_write(&address_space_memory, node + 0x00,
++                                        MEMTXATTRS_UNSPECIFIED, &nxt, 8);
++                    address_space_write(&address_space_memory, node + 0x08,
++                                        MEMTXATTRS_UNSPECIFIED, &k1, 4);
++                    address_space_write(&address_space_memory, node + 0x10,
++                                        MEMTXATTRS_UNSPECIFIED, &k2, 4);
++                    address_space_write(&address_space_memory, node + 0x18,
++                                        MEMTXATTRS_UNSPECIFIED, &val, 8);
 +                    g_cl4_tpidr = ctx;
++                    g_cl4_tpidrro = cl4_dummy + 0x700; /* zeroed region */
 +                }
 +                printf("[cl4] ctor-runner: tramp 0x%llX modinit 0x%llX stack 0x%llX entry 0x%llX\n",
 +                       (unsigned long long)tramp_phys, (unsigned long long)modinit_phys,
@@ -1362,7 +1385,7 @@ index b96d421..22e8335 100644
      }
  
      // BootArgs
-@@ -338,6 +529,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -338,6 +552,11 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
          blob_head += info->ramdisk_f.len;
          blob_head = ROUND_NEXT_PAGE(blob_head);
          END_ENTRY("RAMDisk");
@@ -1374,7 +1397,7 @@ index b96d421..22e8335 100644
      }
  
  #undef PUSH_SEG
-@@ -380,11 +576,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
+@@ -380,11 +599,120 @@ static void arm_load_xnu_sptm(ARMCPU *cpu, MachineState *ms, struct xnu_boot_inf
      } else {
          args.memSize = info->dram_size;
      }
@@ -1603,10 +1626,10 @@ index 699da26..8f023d1 100644
                      memattr = 0xf0;  /* Tagged, Normal, WB, RWA */
                  } else {
 diff --git a/target/arm/tcg/helper-a64.c b/target/arm/tcg/helper-a64.c
-index d8a5f2f..3aa8300 100644
+index d8a5f2f..35d6a7b 100644
 --- a/target/arm/tcg/helper-a64.c
 +++ b/target/arm/tcg/helper-a64.c
-@@ -18,6 +18,12 @@
+@@ -18,6 +18,13 @@
   */
  
  #include "qemu/osdep.h"
@@ -1616,10 +1639,11 @@ index d8a5f2f..3aa8300 100644
 +extern uint64_t g_cl4_tramp_pc;
 +extern int g_cl4_ctors_done;
 +extern uint64_t g_cl4_tpidr;
++extern uint64_t g_cl4_tpidrro;
  #include "qemu/units.h"
  #include "cpu.h"
  #include "gdbstub/helpers.h"
-@@ -753,6 +759,37 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
+@@ -753,6 +760,40 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
          }
          env->pc = new_pc;
  
@@ -1647,6 +1671,9 @@ index d8a5f2f..3aa8300 100644
 +            g_cl4_ctors_done = 1;
 +            if (g_cl4_tpidr) {
 +                env->cp15.tpidr_el[0] = g_cl4_tpidr;
++            }
++            if (g_cl4_tpidrro) {
++                env->cp15.tpidrro_el[0] = g_cl4_tpidrro;
 +            }
 +            env->pc = g_cl4_tramp_pc;
 +            qemu_log_mask(CPU_LOG_INT,

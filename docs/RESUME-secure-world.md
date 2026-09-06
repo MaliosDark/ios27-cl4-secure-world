@@ -613,3 +613,27 @@ per-thread registry should already hold (2,5), find which ctor/step registers it
 Either way the ctor-runner is the correct root-cause mechanism and is now in place;
 the x1 injection is still active alongside (can be dropped once ctor-seeding alone is
 confirmed sufficient for the domain descriptor).
+
+## UPDATE 15 — Path C: AppleDCP crash pinned (garbage PAC callback)
+Mapped the dtree_norm AppleDCP panic (fileset kernelcache, slide 0x20000000, top-level
+segs: __TEXT 0xfffffff007004000/fo0, __TEXT_EXEC 0xfffffff008400000/fo0x13fc000, ...).
+Crash call site: static 0xfffffff00ac937c4 (runtime lr 0xfffffff02ac937c8), file off
+0x3c8f7c8, inside a RTBuddy/AppleDCP callback-dispatch function 0xfffffff00ac9376c:
+   ...9379c: ldr x8, [x2, #8]        ; x8 = object.callback ptr (x2 = 3rd arg object)
+   ...937a0: cbz x8, +0x3c           ; null-checked -> NOT null (so it proceeds)
+   ...937bc: ldr w0, [x21, #0x20]
+   ...937c0: mov x17, #0xba5         ; PAC modifier
+   ...937c4: blraa x8, x17           ; AUTHENTICATED virtual/callback call -> CRASH
+x8 = [x2+8] is a PAC-signed function pointer (auth key A, modifier 0xba5). It is
+non-null but GARBAGE (not correctly signed), so blraa yields a misaligned target
+(0xfffffff02706e459) -> "PC alignment exception". The object x2 was left partially
+initialised because DCP_NORMALIZE bypasses the DCP transport-setup step that would have
+installed a valid (signed) callback. This is the first of the AppleDCP bring-up
+null/garbage derefs (agent C step 3; the ChefKiss-t8030 pattern). 
+NEXT for path C: identify object x2 and what installs its [+8] callback in a normal DCP
+bring-up; either (a) provide/So it points at a valid handler, or (b) patch this dispatch
+to skip when the callback is not a valid signed pointer (careful: it drives real logic).
+Then AppleDCP proceeds toward writing CPU_CONTROL RUN to the ASC mailbox (apple_dcp),
+after which the IOMFB/EPIC RPC layer must be built. This is the dominant remaining cost.
+Two fronts now run in parallel: path C (this) foreground; path A per-thread registry
+(the (2,5) factory) via a background agent.

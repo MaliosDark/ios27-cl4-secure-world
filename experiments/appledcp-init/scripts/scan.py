@@ -44,7 +44,7 @@ def scan(kind, target=None, page=None, disp=0, lo=None, hi=None):
             m=ins.mnemonic; ops=ins.operands
             ffo=v2f(ins.address)
             if m=="adrp":
-                regs[ops[0].reg]=ops[1].imm
+                regs[ops[0].reg]=ops[1].imm & 0xffffffffffffffff
             elif m=="add" and len(ops)==3 and ops[1].type==ARM64_OP_REG and ops[2].type==ARM64_OP_IMM and ops[1].reg in regs:
                 regs[ops[0].reg]=regs[ops[1].reg]+ops[2].imm
             elif kind=="ea" and m in ("str","ldr","stur","ldur","strb","ldrb") and ops and ops[-1].type==ARM64_OP_MEM:

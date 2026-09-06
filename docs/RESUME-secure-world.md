@@ -814,3 +814,15 @@ and keyboard->guest wired. Two entry points: ver_pantalla.sh (restore ramdisk, w
 demo now) and run_rootfs.sh (full OS, needs the user's rootfs -- ChefKiss: firmware
 acquisition/decryption is the user's, not automated). Everything except the rootfs itself
 is plug-and-play: panel scanout, boot screen, keyboard, DCP mailbox.
+
+## UPDATE 24 — INTERACTIVE ROOT SHELL on the panel (bash-5.3#)
+The restore ramdisk already ships a debug shell: /bin/bash + LaunchDaemon
+com.jprx.bash.plist (Program=/bin/bash, StdIn/Out/Err=/dev/console, Interactive,
+KeepAlive). launchd spawns it ("Successfully spawned bash[3]"; "bash-5.3#" prompt seen
+on the panel). Combined with UPDATE 22 (keyboard->UART), the QEMU window's keyboard
+reaches bash: typing runs commands (bash echoed "command not found"). So we have a live
+interactive ROOT shell on the iPhone panel with NO full rootfs needed. Caveats: bash's
+/dev/console is shared with launchd's own logging, so output interleaves with launchd
+lines; and QMP send-key must use valid lowercase qcodes (uppercase names are invalid --
+a test artifact, not the wiring). On a real keyboard in the QEMU window (ver_pantalla.sh)
+input is one key at a time. shots/panel-root-shell.png shows bash-5.3# on the panel.

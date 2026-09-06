@@ -476,3 +476,48 @@ Bottom line: approach (b) is the SHORTER/lower-risk route to pixels than booting
 the 164MB Ap,ExclaveOS userspace; step "finish apple_dcp IOMFB/EPIC + scanout" is the
 dominant cost and is common to BOTH the CL4 and the bypass routes -> it is worth building
 regardless of which gate we solve.
+
+## UPDATE 11 — Path A findings + THREE-FRONT SYNTHESIS (decision point)
+### Path A (CL4 init) — ROOT CAUSE identified
+The (2,5) factory null is a REGISTRY lookup, not an allocator:
+  factory 0xc00a1e70: mrs x8,tpidr_el0; ldr x8,[x8,#0x10]; ldr x9,[x8] (list head);
+  walk singly-linked list matching (key1,key2)=(2,5); return node.value ([node+0x18]);
+  head is NULL -> return 0.
+TPIDR_EL0 is set by SPTM/GXF (no `msr tpidr_el0` anywhere in CL4 __TEXT). The registry it
+points at (TPIDR_EL0->[+0x10]->[+0]) is populated by CL4's CONSTRUCTORS.
+__DATA,__mod_init_func @ vmaddr 0xc0698fc0, size 0x58 = 11 pointers, flags 0x09
+(S_MOD_INIT_FUNC_POINTERS). Constructors (vmaddr): 0xc0001800, 0xc00795d4, 0xc00a2ad4,
+0xc00aa814, 0xc01552bc, 0xc03c9868, 0xc04020e4, 0xc0402e98, 0xc0437ef0, 0xc0439524,
+0xc043a8a4. Ctor[2] 0xc00a2ad4 is a registrar (loops 4 entries at table 0xc068e840 stride
+0x50, calls 0xc00a2b28 to register each) -> seeds the (2,x) registry the factory reads.
+CRITICAL: there is NO in-__TEXT dispatcher that runs __mod_init_func. Per the
+S_MOD_INIT_FUNC_POINTERS ABI, the EXTERNAL LOADER (SPTM/exclave loader) iterates this
+array and calls each ctor at boot. Our synthesized boot jumps straight to CL4's entry and
+NEVER runs the constructors -> every registry is empty -> the whole class of nulls
+(domain descriptor, (2,2)/(2,5) singletons, ...). Fixing one null by hand only exposes the
+next; the real fix is to run the 11 ctors (with a valid TPIDR_EL0 per-thread context whose
+[+0x10] registry field is set up) OR to complete the SPTM->SK handoff so SPTM's loader
+performs the mod-init pass. Ordering: ctors run only after domain setup completes.
+
+### Synthesis of A + B + C  (all three fronts)
+- A: CL4's registries are empty because the __mod_init_func constructor pass never ran
+  (loader's job). This is ONE root cause for the many nulls.
+- B: SPTM builds the SK handoff from a handoff_region + device-tree parse
+  (uat_bootstrap_parse_dt) and normally runs CL4's loader/ctor pass; reversing it fully is
+  deep and its addressing is base-relative (needs physical-addr runtime disasm).
+- C: The screen's gate is XNU RTBuddy(DCP)::start waiting on
+  waitForMatchingService(SecureRTBuddyDCP, -1). The publisher SecureRTBuddyProxy registers
+  that service ONLY after a live Tightbeam handshake over an exclave endpoint -- i.e. it
+  needs CL4 **and** the 164 MB Ap,ExclaveOS SECURE USERSPACE (dyld+Tightbeam) running.
+DECISIVE FACT: booting the CL4 kernel is NOT sufficient for the screen -- the service is
+registered by ExclaveOS userspace, a whole second OS. So the CL4/A+B route to pixels is
+enormous (CL4 kernel + constructor/loader emulation + full ExclaveOS bring-up).
+=> PRAGMATIC ROUTE TO PIXELS = Path C(b): kernel-patch SecureRTBuddyProxy::start() to
+registerService() immediately with its route adaptor redirected to the NORMAL-world DCP
+ASC mailbox (0x412E00000), neutralize AppleDCP null/secure-route derefs, and finish the
+DCP emulation in apple_dcp.c (map AFK rings at bfr_dva, implement IOMFB/EPIC RPC:
+mode-set / surface-register / swap) + scanout to DarwinFB. The apple_rtkit/apple_dcp
+transport handshake already exists; the IOMFB/EPIC + scanout piece is the dominant cost
+and is REQUIRED BY EVERY route to pixels, so it is worth building now regardless.
+The CL4 research (UPDATES 3-11) is preserved: if we ever bring up the real secure world,
+the constructor-pass + handoff findings are the key.

@@ -553,3 +553,29 @@ secureproxy_v2 patch):
 HONEST STATUS: every route to actual pixels (full CL4+ExclaveOS, or DCP-mailbox bypass) is
 large; the DCP IOMFB emulation is unavoidable and common to all. CL4 now executes and the
 whole secure-world boot chain + DCP gate are mapped and preserved.
+
+## UPDATE 13 — Path C: dtree_norm activates AppleDCP (next blocker = null vtable call)
+Booting with firmware/dtree_norm (DCP_NORMALIZE: iop-dcp-nub made structurally identical
+to iop-ans-nub, a plain ASC-mailbox RTBuddy IOP) changes the DCP behaviour:
+- 381 serial lines (vs 209 baseline). RTBuddy(DCP)::start no longer parks on the secure
+  route; AppleDCP becomes ACTIVE and runs its init.
+- BUT it panics: "PC alignment exception from kernel at pc 0xfffffff02706e459, lr
+  0xfffffff02ac937c8" inside com.apple.driver.AppleDCP (dependency RTBuddy). pc is
+  MISALIGNED (ends 0x9) -> AppleDCP did `blr`/`br` through a garbage/null function
+  pointer (uninitialised vtable / route adaptor). Nested panic x3.
+- Still NO [rtkit:dcp]/[dcp] mailbox traffic -> the crash happens during AppleDCP setup,
+  BEFORE it boots the coprocessor over the ASC mailbox.
+So DCP_NORMALIZE gets us past the "wait forever" gate but AppleDCP then calls through an
+uninitialised pointer (agent C's step 3: neutralize AppleDCP null/secure-route derefs).
+This is the pre-existing dtree variant firmware/dtree_norm; many other DT experiment
+variants exist (dtree_nx=NO_EXCLAVES, dtree_disp0, dtree_sec, dtree_plain, ...).
+NEXT for path C:
+  1. Find the AppleDCP call site (lr 0xfffffff02ac937c8, minus slide) that does the bad
+     indirect branch to 0xfffffff02706e459; identify which object/vtable is null (likely
+     the route adaptor / a service AppleDCP expected from the secure world). Patch it to a
+     valid path or provide the missing object so AppleDCP proceeds to boot the coprocessor.
+  2. Once AppleDCP writes CPU_CONTROL RUN, apple_rtkit/apple_dcp handshake fires ([rtkit:
+     dcp]/[dcp] logs). Then build the IOMFB/EPIC RPC on top (mode-set/surface/swap) and
+     scan out to the DARWIN_FB console.
+The alignment/null-call is the classic ChefKiss-t8030 DCP bring-up sequence (per Parts
+26/36/37): several ordered null-derefs to patch before AppleDCP's start() completes.

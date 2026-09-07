@@ -30,7 +30,7 @@ trap fix_tty EXIT
 
 DARWIN_AIC=1 DARWIN_DART=1 DARWIN_DISP=all DARWIN_RTKIT=1 DARWIN_FB=1 \
 "$Q" -M darwin \
-    -bootkc  "$FW/bootkc" \
+    -bootkc  "${BOOTKC:-$FW/bootkc.md0}" \
     -dtree   "${DTREE:-$FW/dtree_ios}" \
     -tc      "$FW/ramdisk.tc" \
     -ramdisk "$ROOTFS" \

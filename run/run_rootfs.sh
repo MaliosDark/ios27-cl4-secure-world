@@ -36,7 +36,8 @@ DARWIN_AIC=1 DARWIN_DART=1 DARWIN_DISP=all DARWIN_RTKIT=1 DARWIN_FB=1 \
     -ramdisk "$ROOTFS" \
     -sptm    "$FW/sptm" \
     -txm     "$FW/txm" \
-    -args    "rd=md0 serial=3 -v wdt=-1 wlan-olyhal-abort" \
+    -args    "rd=md0 serial=3 -v wdt=-1 wlan-olyhal-abort amfi_enforce_launch_constraints=0" \
+
     -m "$MEM" \
     -serial mon:stdio \
     "$@"

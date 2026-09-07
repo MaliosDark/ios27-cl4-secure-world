@@ -228,7 +228,7 @@ index 51d240b..9f5bbca 100644
 +
 +
 +// ---------------------------------------------------------------------------
-+// Apple AIC v3 — a real interrupt controller
++// Apple AIC v3 - a real interrupt controller
 +//
 +// The stock darwin-vm AIC is zeroed RAM with an IRQ count written into it: it
 +// cannot deliver an interrupt at all, which is why every device-driven
@@ -927,7 +927,7 @@ index 51d240b..9f5bbca 100644
 +}
 +
 +// ---------------------------------------------------------------------------
-+// Apple DART (t8110) — minimal model
++// Apple DART (t8110) - minimal model
 +//
 +// Just enough register behaviour for the iOS AppleDART driver to finish
 +// initialising. It does not translate addresses; nothing in this machine DMAs

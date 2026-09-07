@@ -1,6 +1,6 @@
 #!/bin/bash
-# Abre la ventana de QEMU y muestra la pantalla del iPhone (panel del DCP)
-# booteando iOS 27 en vivo. Corré esto en tu Mac (NO headless).
+# Opens the QEMU window and shows the iPhone screen (DCP panel)
+# booting iOS 27 live. Run this on your Mac (NOT headless).
 set -euo pipefail
 cd "$(dirname "$0")"
 D=firmware
@@ -17,5 +17,5 @@ qemu-sptm/build/qemu-system-aarch64 \
   -args    "rd=md0 serial=3 -v -noprogress wdt=-1 wlan-olyhal-abort" \
   -serial  mon:stdio \
   -m 8G
-# ^ sin "-display none": QEMU abre una VENTANA con el panel del iPhone (640x1136).
-#   El log serial sale en esta misma terminal.
+# ^ without "-display none": QEMU opens a WINDOW with the iPhone panel (640x1136).
+#   The serial log prints in this same terminal.

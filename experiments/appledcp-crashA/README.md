@@ -1,4 +1,4 @@
-# AppleDCP crash A — root-cause CORRECTION + fix design
+# AppleDCP crash A - root-cause CORRECTION + fix design
 
 Authorized security research on the user's own machine. Analysis + patch **design** only.
 Nothing here was built or booted; `firmware/bootkc`, `qemu-sptm/`, `dt_fixup.py` were only
@@ -15,7 +15,7 @@ segment→file-offset table; `scripts/fileset.py <static>` names the owning `LC_
 
 ---
 
-## TL;DR — the prior model was wrong; crash A is a base-XNU error-decoder overrun
+## TL;DR - the prior model was wrong; crash A is a base-XNU error-decoder overrun
 
 The `appledcp-init` analysis (and RESUME UPDATE 15/17) modelled crash A as *"AppleDCP took the
 secure/exclave-firmware branch, never populated a handler table, and the dispatcher at
@@ -25,14 +25,14 @@ every address and overturns it:
 - The function at `0xfffffff00ac9376c` is a **base-XNU generic table-walk dispatcher**, and the
   table `x2` it walks is a **compile-time `const` array in `__DATA_CONST`**
   (`0xfffffff007de2338`), not a runtime-populated AppleDCP object. Its entries are valid,
-  correctly chained-fixup-signed function pointers. Nobody "fails to fill" it — it is static
+  correctly chained-fixup-signed function pointers. Nobody "fails to fill" it - it is static
   data. (Task 1.)
 - The enclosing caller is XNU **`sleh.c`** (string `"sleh.c"` @ `0xfffffff007067a17`,
-  `"Panic lockdown initiated for platform error @%s:%d"` @ `0xfffffff007067a3e`) — the
+  `"Panic lockdown initiated for platform error @%s:%d"` @ `0xfffffff007067a3e`) - the
   synchronous-exception low-level handler. The specific caller path is the **external-abort /
   platform-error** arm.
 - The `blraa` fault target `0xfffffff02706e459` (static `0xfffffff00706e459`) is **not a
-  callback at all — it is a string literal**, `" (bad cmd)"`, sitting in the `const`
+  callback at all - it is a string literal**, `" (bad cmd)"`, sitting in the `const`
   string-pointer pool **immediately after** the 7-entry `hwerr_type_*` decoder table. The walk
   **overran the 7 valid entries** and `blraa`'d the first string pointer → branch to an
   odd/misaligned address → **"PC alignment exception from kernel."**
@@ -45,7 +45,7 @@ unmodelled by QEMU's CPU (so no `hwerr_type_*` row matches); the walk fell off t
 const table and called a string as a function.
 
 **Consequence for the fix:** no kernel branch-patch can make AppleDCP boot, because the
-aborting MMIO **read still returns no data** — AppleDCP cannot get the register value it needs.
+aborting MMIO **read still returns no data** - AppleDCP cannot get the register value it needs.
 The only real fix is to **back the MMIO** (QEMU/DT side), exactly as the pram fix backed the
 panic-log region. A kernel patch can at most *unmask* the primary SEA's fault address. This is
 the single most important correction of this pass.
@@ -59,7 +59,7 @@ the single most important correction of this pass.
 
 ### 1a. The dispatcher (`scripts/kc.py dis 0xfffffff00ac9376c`)
 
-`0xfffffff00ac9376c` (fo `0x3c8f76c`, `com.apple.kernel __TEXT_EXEC`) — a generic
+`0xfffffff00ac9376c` (fo `0x3c8f76c`, `com.apple.kernel __TEXT_EXEC`) - a generic
 "poll each registered handler; first that claims the id wins" walk:
 
 ```
@@ -93,8 +93,8 @@ function:
 Enclosing function **`0xfffffff00ac92f08`** (fo `0x3c8ef08`). It reads `mpidr_el1`,
 `tpidr_el1`, and a battery of Apple implementation-defined error-status registers
 (`s3_4_c15_c0_0..3`, `s3_3_c15_c0/c2_0`, `s3_5_c15_c0_5`, `s3_3_c15_c8/c9/c10_0`), builds an
-on-stack syndrome descriptor at `sp+0x68`, and calls the dispatcher four times — once per
-error-register group — each with a **different `const` table**. For the group that crashes
+on-stack syndrome descriptor at `sp+0x68`, and calls the dispatcher four times - once per
+error-register group - each with a **different `const` table**. For the group that crashes
 (`x22 = mrs s3_5_c15_c0_5`, string label `"DPC"` @ `0xfffffff00706d2b0`):
 
 ```
@@ -105,7 +105,7 @@ error-register group — each with a **different `const` table**. For the group 
 ```
 
 `x2 = 0xfffffff007de2338` is in **`__DATA_CONST`** (`fileset.py` → `com.apple.kernel
-__DATA_CONST`) — a **read-only compile-time table**, resolved at load by chained fixups. Dump
+__DATA_CONST`) - a **read-only compile-time table**, resolved at load by chained fixups. Dump
 it with `scripts/hwerr_table.py`:
 
 ```
@@ -121,7 +121,7 @@ it with `scripts/hwerr_table.py`:
 ```
 
 The table is **exactly 7 valid `hwerr_type_*` entries**. Right after it (`+0xa8`) begins a
-separate `const` array of **error-suffix strings** — plain rebase pointers (auth=0), not
+separate `const` array of **error-suffix strings** - plain rebase pointers (auth=0), not
 callbacks. `[+0xa8].cb = 0xfffffff00706e459` is the string **`" (bad cmd)"`**, which equals the
 panic `pc` bit-for-bit. So on the crashing iteration `x8 = [table + 0xa8 + 8] = 0x…0706e459`
 (non-zero → `cbnz` keeps looping), and `blraa x8,#0xba5` branches to it → PC-alignment fault.
@@ -134,7 +134,7 @@ the string pool → the walk overruns → crash. This will happen for **any** un
 on this machine, not just DCP's.
 
 `scripts/`: `disc_fast.py` (disc-immediate sign/call sites), `rawbl.py` (definitive raw BL/B
-xref), `addr_taken.py` + `chained.py` (LC_DYLD_CHAINED_FIXUPS resolver — proves **no** pointer
+xref), `addr_taken.py` + `chained.py` (LC_DYLD_CHAINED_FIXUPS resolver - proves **no** pointer
 anywhere in the image targets `0xac9376c`; it is reached only by those 4 local `BL`s),
 `hwerr_table.py` (the table dump above).
 
@@ -176,7 +176,7 @@ The arm that calls the hwerr decoder is the **external-abort filter** at
 
 The mask `0xE3010000` selects the **external-abort family of Data/Instruction Fault Status
 Codes** (SEA and SEA-on-translation-walk). i.e. `sleh` reached the hwerr decoder **because a
-load/store returned an external abort** — the signature of a read/write to **MMIO that the
+load/store returned an external abort** - the signature of a read/write to **MMIO that the
 QEMU machine does not back**. The faulting address is `FAR_EL1` = `x23` (arg to
 `0xac6548c`; also `x1` into the decoder at `0xac65ad8`). AppleDCP's coprocessor-bring-up
 touches a DCP register block that is not mapped → SEA → this path → overrun.
@@ -184,44 +184,44 @@ touches a DCP register block that is not mapped → SEA → this path → overru
 There are two other decoder callers (`0xfffffff00ac6829c`, `0xfffffff00ac689e4`) for the other
 SEA sub-cases; all three funnel into the same overrunning decoder.
 
-### Reveal the exact faulting MMIO address (do this first — it names the fix target)
+### Reveal the exact faulting MMIO address (do this first - it names the fix target)
 
 `FAR_EL1` is not printed because the hwerr overrun pre-empts `sleh`'s normal abort panic. Two
 ways to recover it, no live-tree edits required beyond flags:
 
 1. **QEMU log (preferred, zero patching):** boot the existing repro with
    `-d unimp,guest_errors` (and `mmu` if wanted). `create_unimplemented_device` and the
-   unassigned-access path log the address of the touched region at the instant of the abort —
+   unassigned-access path log the address of the touched region at the instant of the abort - 
    that address (minus `iobase`) is the DCP register block AppleDCP hit. This directly names
    which `arm-io/*` node to back in §3.
 2. **Diagnostic kernel patch (optional):** neuter the external-abort→hwerr call so `sleh`
    falls through to its normal abort panic, which prints `far`. Guardrail-compliant
    (Keystone-backed, semantic anchor, no hardcoded bytes):
-   - Anchor: in `sleh` (`0xac6548c`), the unique `BL 0xfffffff00ac92f08` at
+ - Anchor: in `sleh` (`0xac6548c`), the unique `BL 0xfffffff00ac92f08` at
      **`0xfffffff00ac65ae4` (fo `0x3c61ae4`)** guarded by the external-abort `tst`+`b.eq` at
      `0xac65ac8/0xac65ad0`.
-   - Patch intent: replace the guard `b.eq 0xac65bf8` at **`0xfffffff00ac65ad0` (fo
+ - Patch intent: replace the guard `b.eq 0xac65bf8` at **`0xfffffff00ac65ad0` (fo
      `0x3c61ad0`)** with an **unconditional `B 0xfffffff00ac65bf8`** (Keystone
      `asm("b #imm")`), so the hwerr decode is never entered and the normal panic prints `far`.
-     *This is diagnostic only — it does not let AppleDCP boot.*
+     *This is diagnostic only - it does not let AppleDCP boot.*
 
 ---
 
-## 3. Minimal fix design (Task 3) — back the MMIO; do NOT patch the kernel branch
+## 3. Minimal fix design (Task 3) - back the MMIO; do NOT patch the kernel branch
 
 Ordered by preference. The controlling fact: **the aborting access must return data**, so the
 fix has to be on the machine/DT side; a kernel patch cannot synthesize the register value.
 
-### (a) Device-tree flags — none of the existing `DCP_*` options fix *this* stage
+### (a) Device-tree flags - none of the existing `DCP_*` options fix *this* stage
 
 `dt_fixup.py`'s `DCP_NO_ROUTES` / `DCP_DROP_NOFWSVC` / `DCP_NORMALIZE` / `DCP_REGION` /
 `DCP_POWER_MODE` all address the **earlier** secure-route / firmware-service handshake
-(the `far=0xb1` and RTBuddy-start problems) — a stage this boot has already **passed** with
+(the `far=0xb1` and RTBuddy-start problems) - a stage this boot has already **passed** with
 `dtree_nr2` (`DCP_NO_ROUTES=1`, `no-firmware-service` kept). None of them maps or changes an
 MMIO region, so none can stop the SEA. Keep `dtree_nr2_pram` (pram backed, UPDATE 26) as the
 base; there is no DT-property-only flip for crash A.
 
-### (b) QEMU MMIO backing — the real fix
+### (b) QEMU MMIO backing - the real fix
 
 `hw/arm/darwin.c` already has the exact mechanism: **`init_display_stub()`** (≈ line 1189)
 maps display-stack register ranges as **`create_unimplemented_device`** (RAZ/WI, logs under
@@ -234,11 +234,11 @@ DARWIN_DISP=all|1  -> stub all;  else substring-match one node (for bisecting)
 ```
 
 RESUME UPDATE 17 found `DARWIN_DISP=all` + `DARWIN_DART` + `DARWIN_PMGR` broke early boot
-(29 lines) — because the **DARTs** and PMGR have real semantics that a dumb RAZ/WI stub
+(29 lines) - because the **DARTs** and PMGR have real semantics that a dumb RAZ/WI stub
 violates. The display **register** blocks (`disp0`, `dcp`, `dcp0-expert`) do not have that
 problem. So:
 
-**Fix:** run the existing repro plus a **selective** display stub — the node named by the FAR
+**Fix:** run the existing repro plus a **selective** display stub - the node named by the FAR
 from §2. Concretely:
 
 ```
@@ -259,7 +259,7 @@ must read back non-zero), promote that one node from `create_unimplemented_devic
 `asc_ops` pattern already in `darwin.c`). Identify which bit by re-reading the `-d unimp` trace
 for the offset AppleDCP spins on.
 
-### (c) Kernel patch — explicitly NOT the boot fix
+### (c) Kernel patch - explicitly NOT the boot fix
 
 The only guardrail-compliant kernel patch here is the **diagnostic** one in §2.2 (force
 `sleh`'s external-abort guard to skip the hwerr decode so `far` prints). Patching the
@@ -271,7 +271,7 @@ log it as `vmaddr / file-offset / before→after` and update
 
 ---
 
-## 4. Next stage — after AFK is up, decode the guest surface (Task 4)
+## 4. Next stage - after AFK is up, decode the guest surface (Task 4)
 
 Once the SEA is gone and `[dcp] AFK INIT` fires, `dcp_ep_handler` in `hw/arm/apple_dcp.c`
 already drives the ring handshake to "transport up" (verified by reading the file):
@@ -281,7 +281,7 @@ already drives the ring handshake to "transport up" (verified by reading the fil
 (first / second half of the 0x1000 buffer, `:123`/`:128`) → `START` (`:132`) → guest
 `START_ACK` sets `s->started` (`:137`).
 
-**The gap:** `RBEP_RECV` (`case` at `apple_dcp.c:143`) is **only `printf`'d** — the ring is
+**The gap:** `RBEP_RECV` (`case` at `apple_dcp.c:143`) is **only `printf`'d** - the ring is
 never read. That is where IOMFB/EPIC RPC arrives. To scan out the guest's real surface:
 
 1. Add a parsed-surface struct to `AppleDCPState`, e.g.
@@ -291,11 +291,11 @@ never read. That is where IOMFB/EPIC RPC arrives. To scan out the guest's real s
    (first half of the buffer at `bfr_dva`; RX = second half at `+0x800`), parse the AFK ring
    header (read/write pointers), and walk the EPIC sub-messages. The IOMFB call carrying the
    surface is **`swap_submit` / `swap_start`** (`IOMobileFramebuffer::swap_submit_dcp`): it
-   holds the IOSurface descriptor — DMA `iova` base, `stride` (bytes/row), `width`, `height`,
+   holds the IOSurface descriptor - DMA `iova` base, `stride` (bytes/row), `width`, `height`,
    pixel format. Mirror roles from Asahi `drivers/gpu/drm/apple/afk.c` + `dcp/` (we are the
    coprocessor; their AP-side *send* == our *receive*). Fill `surf`, set `surface_live`.
 3. In `dcp_paint` (`:246`): when `surface_live`, replace the synthetic renderer with
-   `address_space_read(surf.iova, stride*h)` and blit/format-convert into `fb_base` — the
+   `address_space_read(surf.iova, stride*h)` and blit/format-convert into `fb_base` - the
    DarwinFB console already scans out `fb_base` (`darwin.c` `init_framebuffer` /
    `darwin_fb_update`; `apple_dcp.c` already writes `fb_base` via `address_space_write` at
    `:336`).
@@ -328,15 +328,15 @@ not as RAZ/WI).
 
 ## 6. Scripts (`./scripts/`, use `/Users/maliosdark/vphone-cli/.venv`)
 
-- `kc.py` — segment map + static/runtime disasm + v2f/f2v/xref. `kc.py dis 0xfffffff00ac9376c`.
-- `fileset.py` — static vmaddr → owning `LC_FILESET_ENTRY` kext + segment.
-- `rawbl.py` — **definitive** raw `BL`/`B` xref (no capstone desync). `rawbl.py 0xfffffff00ac9376c`.
-- `chained.py` — `LC_DYLD_CHAINED_FIXUPS` (format 8, `DYLD_CHAINED_PTR_64_KERNEL_CACHE`)
+- `kc.py` - segment map + static/runtime disasm + v2f/f2v/xref. `kc.py dis 0xfffffff00ac9376c`.
+- `fileset.py` - static vmaddr → owning `LC_FILESET_ENTRY` kext + segment.
+- `rawbl.py` - **definitive** raw `BL`/`B` xref (no capstone desync). `rawbl.py 0xfffffff00ac9376c`.
+- `chained.py` - `LC_DYLD_CHAINED_FIXUPS` (format 8, `DYLD_CHAINED_PTR_64_KERNEL_CACHE`)
   resolver; proves no data pointer targets the dispatcher.
-- `addr_taken.py` — adrp+add materialization + DATA-pointer scan for an address.
-- `disc_fast.py` — fast raw scan for a PAC-discriminator immediate; classify SIGN/CALL/AUTH.
-- `sign_ctx.py` — context around a sign site.
-- `hwerr_table.py` — dump the overrun table `0xfffffff007de2338`, resolve entries, mark where
+- `addr_taken.py` - adrp+add materialization + DATA-pointer scan for an address.
+- `disc_fast.py` - fast raw scan for a PAC-discriminator immediate; classify SIGN/CALL/AUTH.
+- `sign_ctx.py` - context around a sign site.
+- `hwerr_table.py` - dump the overrun table `0xfffffff007de2338`, resolve entries, mark where
   the 7 valid `hwerr_type_*` rows end and the string pool begins.
 
 ### Cited sites (vmaddr / file offset / fileset)
@@ -352,13 +352,13 @@ not as RAZ/WI).
 | generic table-walk dispatcher (fn start)        | `0xfffffff00ac9376c` | `0x3c8f76c` | com.apple.kernel `__TEXT_EXEC`    |
 | ↳ faulting `blraa x8,#0xba5`                    | `0xfffffff00ac937c4` | `0x3c8f7c4` | com.apple.kernel `__TEXT_EXEC`    |
 | hwerr decoder table (DPC group, `x2`)           | `0xfffffff007de2338` | see `v2f`   | com.apple.kernel `__DATA_CONST`   |
-| ↳ 7 valid `hwerr_type_*` entries                | `+0x000..+0x090`     | —           | (stride 0x18, cb@+8 disc 0xba5)   |
-| ↳ string pool begins (overrun)                  | `+0x0a8`             | —           | com.apple.kernel `__DATA_CONST`   |
+| ↳ 7 valid `hwerr_type_*` entries                | `+0x000..+0x090`     | - | (stride 0x18, cb@+8 disc 0xba5)   |
+| ↳ string pool begins (overrun)                  | `+0x0a8`             | - | com.apple.kernel `__DATA_CONST`   |
 | panic `pc` = string `" (bad cmd)"`              | `0xfffffff00706e459` | see `v2f`   | com.apple.kernel `__TEXT`         |
-| `"sleh.c"` / `"Panic lockdown…platform error"`  | `0xfffffff007067a17` / `…a3e` | —  | com.apple.kernel `__TEXT`         |
-| `"DPC"` group label                             | `0xfffffff00706d2b0` | —           | com.apple.kernel `__TEXT`         |
+| `"sleh.c"` / `"Panic lockdown…platform error"`  | `0xfffffff007067a17` / `…a3e` | - | com.apple.kernel `__TEXT`         |
+| `"DPC"` group label                             | `0xfffffff00706d2b0` | - | com.apple.kernel `__TEXT`         |
 
-QEMU side (read-only reference — do not edit here):
+QEMU side (read-only reference - do not edit here):
 `hw/arm/apple_dcp.c` (`dcp_ep_handler` `RBEP_*`, `bfr_dva` `:63/:117`, `RBEP_RECV` `:143`
 log-only, `dcp_paint` `:246`, `fb_base` write `:336`), `hw/arm/darwin.c`
 (`init_display_stub` ≈`:1189` `DARWIN_DISP` substring RAZ/WI stubs; `init_darts` `:1164`;

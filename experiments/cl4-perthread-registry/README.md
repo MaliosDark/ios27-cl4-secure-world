@@ -1,4 +1,4 @@
-# CL4 per-thread registry — the `(2,5)` lookup fault
+# CL4 per-thread registry - the `(2,5)` lookup fault
 
 Analysis + fix design for the fault reached after the `__mod_init_func`
 constructor-runner (RESUME UPDATE 14): CL4 main init calls a `(2,5)` singleton
@@ -28,7 +28,7 @@ then run the scripts in `scripts/` (see [Scripts](#scripts)).
 * **Registration function:** `register(node)` @ **`0xc00a1e20`** (phys
   `0x10006925e20`). Lock-free `casl` push of a caller-owned node onto the
   per-thread list whose head is `[ [tpidr_el0+0x10] + 0 ]`. Signature:
-  `void register(node*)` — the node already holds `{next@0, key1@8(u32),
+  `void register(node*)` - the node already holds `{next@0, key1@8(u32),
   key2@0x10(u32), value@0x18(u64)}`. (Variant `0xc00a1e04` registers the fixed
   static node `0xc068e7f8` = key `(1,1)`.)
 * **The `(2,5)` entry:** static node template **`0xc068d668`** (`key1=2,key2=5`),
@@ -45,7 +45,7 @@ then run the scripts in `scripts/` (see [Scripts](#scripts)).
   (`0xc00a6ea4`) branch on `tpidr_el0 == 0` to decide *"first entry → build the
   real per-thread context and register the base services."* A non-zero fake TPIDR
   forces the *"already have a context"* path, so the real context build **and the
-  base-service registration (including `(2,5)`) are skipped** — every base
+  base-service registration (including `(2,5)`) are skipped** - every base
   `(k1,k2)` singleton stays unregistered.
 * **Fix (root-cause-faithful):** after the constructor pass, **zero `TPIDR_EL0`**
   before branching to CL4 entry, so CL4's own domain-setup runs its build path and
@@ -56,7 +56,7 @@ then run the scripts in `scripts/` (see [Scripts](#scripts)).
 
 ## 1. The registry mechanism (verified)
 
-### 1.1 Lookup — factory `0xc00a1e70` (phys `0x10006925e70`)
+### 1.1 Lookup - factory `0xc00a1e70` (phys `0x10006925e70`)
 
 ```asm
 mrs  x8, tpidr_el0
@@ -88,7 +88,7 @@ Wrapper **`0xc00a0e58`** (phys `0x10006924e58`) is a *get-or-cache*:
 `if(!*cache){ *cache = factory(k1,k2); } return *cache;`. Callers pass the cache
 cell in `x0` and `(k1,k2)` in `(w1,w2)`.
 
-### 1.2 The `(2,5)` accessor `0xc0098ce0` (phys `0x1000691cce0`) — the fault
+### 1.2 The `(2,5)` accessor `0xc0098ce0` (phys `0x1000691cce0`) - the fault
 
 ```asm
 adrp x0, 0xc06fe000 ; add x0,x0,#0xce0   ; cache cell 0xc06fece0
@@ -99,11 +99,11 @@ retab
 ```
 
 It is one of a **large family** (`0xc0098530`, `0xc0098d0c`, `0xc0098e8c`, …) that
-all look up `(2,5)` and read different fields of the same singleton — i.e. `(2,5)`
+all look up `(2,5)` and read different fields of the same singleton - i.e. `(2,5)`
 is a big shared object. Its canonical address is `value = 0xc06fece8`
 (cache cell `0xc06fece0`; the object sits at cache+8).
 
-### 1.3 Registration — `register(node)` `0xc00a1e20` (phys `0x10006925e20`)
+### 1.3 Registration - `register(node)` `0xc00a1e20` (phys `0x10006925e20`)
 
 ```asm
 mrs  x8, tpidr_el0
@@ -123,7 +123,7 @@ the caller **before** the call. Confirmed by `scripts/find_insert.py` +
 `lookup(k1,k2); if(null){ fill static node; register(node); }` covering keys
 `(4,4)(4,8)(4,0xa)(4,0xb)(4,0xc)(4,0xd)(2,6)` plus the domain-setup batch.
 
-### 1.4 The `(2,5)` registrar — `0xc00982e0` (phys `0x1000691c2e0`)
+### 1.4 The `(2,5)` registrar - `0xc00982e0` (phys `0x1000691c2e0`)
 
 ```asm
 mov w0,#4 ; mov w1,#4 ; bl 0xc00a1e70 ; cbnz x0, .done   ; idempotency guard on (4,4)
@@ -145,7 +145,7 @@ runtime):
 
 ---
 
-## 2. Ordering — who registers `(2,5)` and when
+## 2. Ordering - who registers `(2,5)` and when
 
 Call graph (all verified with `scripts/cl4dis.py bl <addr>`):
 
@@ -170,7 +170,7 @@ CL4 entry 0xc00994f0
 The `(2,5)` **accessors run later**, from indirectly-dispatched event/message
 handlers (`0xc0097e3c` → `0xc00a5454` → `0xc00aa9d0` → `0xc0098ce0`, and the
 `svc`-issuing handler `0xc00a1b24`); no direct `BL` reaches them from entry, so on
-real hardware they fire only **after** a thread has entered its domain — i.e.
+real hardware they fire only **after** a thread has entered its domain - i.e.
 **after** `0xc00a6ea4` populated the list. Ordering on real HW:
 
 ```
@@ -204,19 +204,19 @@ first-entry paths. Nothing in the entry prologue reads TPIDR
 
 ## 3. The fix
 
-### Option (a) — RECOMMENDED, root-cause-faithful: zero TPIDR after the ctor pass
+### Option (a) - RECOMMENDED, root-cause-faithful: zero TPIDR after the ctor pass
 
 Let the constructors run with the fake TPIDR (they need `[tpidr+8]`/`[tpidr+0x10]`
-readable — e.g. the ctor helper `0xc00a6ca4` does `ldr x0,[tpidr+8]`), then set
+readable - e.g. the ctor helper `0xc00a6ca4` does `ldr x0,[tpidr+8]`), then set
 `TPIDR_EL0 = 0` **before** branching to CL4 entry. CL4's `0xc00a6ea4` then takes
 its `.build` path, installs the real context/TPIDR (`0xc00aa724`), and registers
-`(2,5)` via `0xc00982e0` — the faithful reproduction of hardware order. Keep the
+`(2,5)` via `0xc00982e0` - the faithful reproduction of hardware order. Keep the
 existing domain-descriptor **x1 probe** in place; the build path still consumes
 the SK handoff/descriptor.
 
 **Integration (apply later to `qemu-sptm`):**
 
-* `target/arm/tcg/helper-a64.c`, `HELPER(exception_return)` — in the one-shot CL4
+* `target/arm/tcg/helper-a64.c`, `HELPER(exception_return)` - in the one-shot CL4
   handoff that currently diverts to the trampoline and sets
   `env->cp15.tpidr_el[0] = g_cl4_tpidr`: this stays as-is *for the trampoline
   run*. Add a **second** one-shot, keyed on the trampoline's *final* `br entry`
@@ -224,7 +224,7 @@ the SK handoff/descriptor.
   `env->cp15.tpidr_el[0] = 0` right before CL4 entry executes. Simplest concrete
   form: have the trampoline itself `msr tpidr_el0, xzr` as its penultimate
   instruction (see below) so no extra hook is needed.
-* `hw/arm/xnuboot_sptm.c` — no data changes required for (a). Optionally drop the
+* `hw/arm/xnuboot_sptm.c` - no data changes required for (a). Optionally drop the
   fake-context list plumbing once (a) is confirmed (the ctors still need the fake
   ctx while they run, so keep `g_cl4_tpidr` and the ctx; only its *lifetime*
   shrinks to the trampoline).
@@ -243,7 +243,7 @@ The current trampoline tail is:
 ```
 
 Because the four `ldr` literals are PC-relative, add the instruction **in the
-keystone source (via labels)** and let `gen_trampoline.py` re-emit — do **not**
+keystone source (via labels)** and let `gen_trampoline.py` re-emit - do **not**
 byte-patch, or the literal-pool offsets shift. The trampoline grows 104 → 108
 bytes, so bump the loader's copy length / dummypage trampoline slot by 4. The
 ctors have already run with the fake TPIDR; zeroing it hands CL4 entry the
@@ -257,11 +257,11 @@ domain-setup's build path or the next base service needs.
 Risk: the build path (`0xc00a700c`) may hit its own missing-handoff fault; if so,
 fall back to (b) to keep moving, and reverse the build path separately.
 
-### Option (b) — deterministic FALLBACK: pre-seed the `(2,5)` node
+### Option (b) - deterministic FALLBACK: pre-seed the `(2,5)` node
 
 Keep the fake TPIDR; pre-link the `(2,5)` node into the fake context's list so the
 factory finds it. Only fixes `(2,5)` (the immediate fault); expect the next base
-key `(2,4)/(4,4)/(2,6)/(1,1)` to fault next (whack-a-mole — hence (a) is
+key `(2,4)/(4,4)/(2,6)/(1,1)` to fault next (whack-a-mole - hence (a) is
 preferred). Exact writes (from `scripts/gen_perthread_seed.py`; `dummypage` is the
 scratch VA, `dummypage_phys` its physical base, `g_cl4_tpidr = dummypage_phys +
 0x200`):
@@ -282,13 +282,13 @@ scratch VA, `dummypage_phys` its physical base, `g_cl4_tpidr = dummypage_phys +
 (`0xc00a1b24`) tolerates `NULL` (`cbz x0`). To extend the seed to the other base
 services, add nodes `(2,4)/(2,1)/(2,2)/(1,1)` the same way (values unknown → point
 at zeroed scratch), but note their downstream accessors may read non-null fields
-and fault — which is precisely why (a) is the right long-term fix.
+and fault - which is precisely why (a) is the right long-term fix.
 
-`hw/arm/xnuboot_sptm.c` — perform the writes above right after the fake context is
+`hw/arm/xnuboot_sptm.c` - perform the writes above right after the fake context is
 built (next to the existing `g_cl4_tpidr` setup), guarded by the same
 `CL4_NO_CTORS`-style env so it can be toggled.
 
-### Option (c) — the missing input, stated plainly
+### Option (c) - the missing input, stated plainly
 
 The missing handoff input is **not a data blob** but a **register precondition**:
 `TPIDR_EL0` must be `0` at CL4 entry (as SPTM/GXF leaves it on a cold thread), so
@@ -305,7 +305,7 @@ registry-head allocation is required … CL4 does this itself once the static
 descriptor tables … let domain setup proceed."* That is correct **and** implies
 the corollary this experiment proves: the fake TPIDR the runner installs for the
 ctors must be **torn down (zeroed) before entry**, or domain-setup's first-entry
-path — the very path that "does this itself" — is skipped. Add the `msr
+path - the very path that "does this itself" - is skipped. Add the `msr
 tpidr_el0, xzr` to the trampoline tail.
 
 ---

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Corre la VM sirviendo la pantalla por VNC en localhost:5900, para poder
-# VERLA EN VIVO desde otra app (Compartir Pantalla de macOS).
-# Mientras corre: abrí Finder -> Ir -> Conectarse al servidor (Cmd+K) ->
-#   vnc://localhost:5900     (o abrí "Compartir Pantalla" y poné localhost)
+# Runs the VM serving the screen over VNC on localhost:5900, so you can
+# WATCH IT LIVE from another app (macOS Screen Sharing).
+# While it runs: open Finder -> Go -> Connect to Server (Cmd+K) ->
+#   vnc://localhost:5900     (or open "Screen Sharing" and enter localhost)
 set -euo pipefail
 cd "$(dirname "$0")"
 D=firmware; DT=$D/dtree; [[ -f $D/dtree_dbg ]] && DT=$D/dtree_dbg
-echo ">> Pantalla en vivo por VNC: conectate a  vnc://localhost:5900"
+echo ">> Live screen over VNC: connect to  vnc://localhost:5900"
 DARWIN_RTKIT=1 DARWIN_FB=1 \
 qemu-sptm/build/qemu-system-aarch64 -M darwin \
   -bootkc $D/bootkc -dtree $DT -tc $D/ramdisk.tc -ramdisk $D/ramdisk.dmg \

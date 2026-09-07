@@ -1,4 +1,4 @@
-# md0 ramdisk size truncation — iOS 27 (iPhone17,3 / t8140) XNU
+# md0 ramdisk size truncation - iOS 27 (iPhone17,3 / t8140) XNU
 
 **Goal:** boot the full iOS 27 rootfs (9.3 GB, `0x255A00000` bytes) as an `md0`
 memory disk under the darwin-vm QEMU. XNU currently sizes the memory disk with a
@@ -10,14 +10,14 @@ apfs_vfsop_mountroot ... container size 10026483712 greater than device size 143
 mountroot ... error 92
 ```
 
-* `10026483712 = 0x2_55A0_0000` — the real APFS container (from the superblock).
-* `1436549120  = 0x5_5A00_000  = 0x55A00000` — what the `md0` block device reports.
+* `10026483712 = 0x2_55A0_0000` - the real APFS container (from the superblock).
+* `1436549120  = 0x5_5A00_000  = 0x55A00000` - what the `md0` block device reports.
 * `0x255A00000 & 0xFFFFFFFF == 0x55A00000`. A clean 32‑bit truncation of a **byte**
   quantity.
 
 This document pins the exact XNU instructions that truncate, explains the data
 flow from the device‑tree `RAMDisk` region to the `md0` block count, and designs
-the minimal Keystone‑backed kernel patch. **Analysis only — nothing here builds,
+the minimal Keystone‑backed kernel patch. **Analysis only - nothing here builds,
 boots, or modifies the live darwin-vm / vphone-cli trees.**
 
 Kernelcache analysed: `/Users/maliosdark/darwin-vm/firmware/bootkc`
@@ -58,7 +58,7 @@ All the anchor strings ("RAMDisk", "ramdisk params @%s:%d", "mdevadd",
 ### 1a. The DT `RAMDisk` reader = the sole `mdevadd` caller (`mdevinit`)
 
 `mdevadd` (see §3) is at **vmaddr `0xfffffff00ac94ff0`, fo `0x3c90ff0`**. A
-BL‑scan across every executable fileset segment (`scripts` — callers scan) finds
+BL‑scan across every executable fileset segment (`scripts` - callers scan) finds
 **exactly one caller**:
 
 ```
@@ -73,7 +73,7 @@ adrp+add -> 0xfffffff0070ca45b ("RAMDisk")             @ vmaddr 0xfffffff00b2be4
 adrp+add -> 0xfffffff0070ca463 ("ramdisk params @%s:%d") @ vmaddr 0xfffffff00b2bf40c  fo 0x42bb40c
 ```
 
-So this function **is** `mdevinit` (compiled as PAC‑heavy C++/IOKit in iOS 27 — it
+So this function **is** `mdevinit` (compiled as PAC‑heavy C++/IOKit in iOS 27 - it
 reaches the `RAMDisk` property through IORegistry `getProperty`‑style virtual
 calls rather than the classic `SecureDTGetProperty`, but the semantics are
 identical: look up the `/chosen/memory-map` `RAMDisk` entry, then `mdevadd` it).
@@ -141,7 +141,7 @@ struct mdev { uint64_t mdBase; unsigned int mdSize; int mdFlags; int mdSecsize; 
 ```
 
 * `mdSize` is a **page count** in a **uint32** field (`str w19,[x23,#8]`; every reader
-  is `ldr w`). `9.3 GB = 0x255A00 pages` ⇒ **fits in 32 bits** — `mdSize` is stored
+  is `ldr w`). `9.3 GB = 0x255A00 pages` ⇒ **fits in 32 bits** - `mdSize` is stored
   **correctly**. `mdBase` is uint64 (`str x21`).
 * Therefore, as the task hypothesised in step 3, **the truncation is NOT in mdevadd
   and NOT in the page‑count**. It is downstream, wherever `mdSize` is converted
@@ -158,10 +158,10 @@ struct mdev { uint64_t mdBase; unsigned int mdSize; int mdFlags; int mdSecsize; 
 A semantic finder (`scripts/patch_md0_size.py::find_mdev_size_shift_sites`) scans
 `com.apple.kernel/__TEXT_EXEC` for the pattern *"a value loaded from the mdSize
 field `[entry+8]` (`ldr w<s>,[x<e>,#8]`) that is then shifted left by 12 in a
-**32‑bit** register"* — i.e. `lsl w<s>,w<s>,#0xc` or `add w<d>,w<x>,w<s>,lsl #12`.
-It finds **four** sites (nothing hardcoded — all located by the anchor):
+**32‑bit** register"* - i.e. `lsl w<s>,w<s>,#0xc` or `add w<d>,w<x>,w<s>,lsl #12`.
+It finds **four** sites (nothing hardcoded - all located by the anchor):
 
-### Site A — `mdevioctl` `DKIOCGETBLOCKCOUNT` (THE mountroot blocker)
+### Site A - `mdevioctl` `DKIOCGETBLOCKCOUNT` (THE mountroot blocker)
 
 vmaddr `0xfffffff00ac95404`, fo `0x3c91404`:
 
@@ -189,7 +189,7 @@ APFS device size = 0x2AD000 * 512 = 0x55A00000 = 1436549120   <-- EXACT panic nu
 `sub`/`udiv` (0xac95410/0xac95414) operate on the already‑truncated value, so they
 must be widened together.
 
-### Site B — I/O transfer clamp (`mdevrw`/strategy, read path)
+### Site B - I/O transfer clamp (`mdevrw`/strategy, read path)
 
 vmaddr `0xfffffff00ac95530`, fo `0x3c91530`:
 
@@ -203,7 +203,7 @@ vmaddr `0xfffffff00ac95530`, fo `0x3c91530`:
 0xac95548  csel w8, wzr, w10, gt
 ```
 
-### Site C — I/O offset bounds check (strategy)
+### Site C - I/O offset bounds check (strategy)
 
 vmaddr `0xfffffff00ac9568c`, fo `0x3c9168c`:
 
@@ -217,14 +217,14 @@ vmaddr `0xfffffff00ac9568c`, fo `0x3c9168c`:
 0xac956a0  cmp   x8, x9             ; (also truncated)
 ```
 
-### Site D — `mdevinit`'s global record of the ramdisk byte‑extent
+### Site D - `mdevinit`'s global record of the ramdisk byte‑extent
 
 vmaddr `0xfffffff00b2beebc`, fo `0x42baebc` (inside `mdevinit`, right after the
 `mdevadd` call):
 
 ```
 0xb2beeac  ldr  x8, [x20]          ; mdBase (pages)
-0xb2beeb0  lsl  x8, x8, #0xc       ; base BYTES              (64-bit — CORRECT)
+0xb2beeb0  lsl  x8, x8, #0xc       ; base BYTES              (64-bit - CORRECT)
 0xb2beeb8  str  x8, [x9, #0x158]   ; g_ramdisk_base = base_bytes   (@0xfffffff00b6c0158)
 0xb2beebc  ldr  w8, [x20, #8]      ; mdSize (pages)
 0xb2beec0  lsl  w8, w8, #0xc       ; size BYTES              <-- 32-bit TRUNCATES (asymmetric!)
@@ -232,9 +232,9 @@ vmaddr `0xfffffff00b2beebc`, fo `0x42baebc` (inside `mdevinit`, right after the
 ```
 
 The **base** store immediately above uses a 64‑bit `lsl x8`; the **size** store
-uses a 32‑bit `lsl w8` — a clear asymmetric source bug (a `uint32_t` where the
+uses a 32‑bit `lsl w8` - a clear asymmetric source bug (a `uint32_t` where the
 line above is `uint64_t`). The global pair `{0xb6c0158 base, 0xb6c0160 size}` is
-**read ~30 times across the kernel** (xref scan) — it is the kernel's byte‑extent
+**read ~30 times across the kernel** (xref scan) - it is the kernel's byte‑extent
 record of the ram disk (consumed by memory/pager/imageboot bookkeeping). The
 "no ramdisk" path zeros both (`str xzr` @ 0xb2bed1c/0xb2bed24), so 0xb2beec0 is the
 only real truncation for this global.
@@ -246,13 +246,13 @@ only real truncation for this global.
 
 ---
 
-## 4. The fix — minimal Keystone‑backed widen (w → x)
+## 4. The fix - minimal Keystone‑backed widen (w → x)
 
 Every truncation is a single instruction that shifts/adds a page count into a byte
 size in a **32‑bit** register. The fix is to re‑encode those instructions (and the
 two ops that depend on Site A's result) in their **64‑bit** form. Each edit is
 4 bytes → 4 bytes, same location, so no relayout/re‑sign of the macho is needed
-(the darwin-vm SPTM path accepts a patched kernelcache — RESUME‑secure-world.md
+(the darwin-vm SPTM path accepts a patched kernelcache - RESUME‑secure-world.md
 "Reusable techniques"). The two `ldr w` field loads already zero‑extend the full
 `x` register, so they are left unchanged.
 
@@ -280,7 +280,7 @@ but they are produced by Keystone too for uniformity.)
 * **Minimum to pass mountroot:** Site A (A1+A2+A3). This alone makes
   `DKIOCGETBLOCKCOUNT` report `0x12AD000` blocks ⇒ device size `0x255A00000` =
   10026483712, so APFS's "container ≤ device" check passes.
-* **Required for a *usable* 9.3 GB md0:** Sites B and C as well — otherwise reads to
+* **Required for a *usable* 9.3 GB md0:** Sites B and C as well - otherwise reads to
   offsets/lengths beyond `0x55A00000` are clamped (B) or rejected as out‑of‑range
   (C), and APFS metadata near the end of the container (checkpoints/spaceman)
   can't be read, so mount/boot fails after the size check. Fix A+B+C together.
@@ -297,7 +297,7 @@ stored in a `uint64_t`, and offsets are computed 64‑bit. Only four
 byte‑size expressions were compiled with a 32‑bit `<<12`. Widening them is
 sufficient; **no** structure field needs to grow and **no** alternative (real block
 device / sub‑4 GB rootfs) is required. If a future kernelcache instead stored
-`mdSize` itself in bytes as `uint32`, that would be a hard 32‑bit design — but this
+`mdSize` itself in bytes as `uint32`, that would be a hard 32‑bit design - but this
 one is not.
 
 ---
@@ -305,7 +305,7 @@ one is not.
 ## 5. How to apply / validate (design; not executed here)
 
 1. Retarget on the exact `bootkc` under test by re‑running the **semantic finder**
-   (`scripts/patch_md0_size.py`) — it re‑derives the six offsets from the
+   (`scripts/patch_md0_size.py`) - it re‑derives the six offsets from the
    `ldr w,[entry+8]` + 32‑bit `<<12` anchor; **do not** trust the offsets in the
    table above against a different build.
 2. `python scripts/patch_md0_size.py --emit-bytes <copy-of-bootkc>` writes a patched
@@ -318,7 +318,7 @@ one is not.
    research/0_binary_patch_comparison.md"): when this graduates from design to an
    applied patcher, add a `patch_md0_ramdisk_size` row to
    `research/0_binary_patch_comparison.md` describing the four‑site w→x widen.
-   *(Not done here — this task is analysis/design only and must not modify the live
+   *(Not done here - this task is analysis/design only and must not modify the live
    tree.)*
 
 ---
@@ -328,11 +328,11 @@ one is not.
 Run with `/Users/maliosdark/vphone-cli/.venv/bin/python` (capstone 5.0.7,
 keystone 0.9.2).
 
-* `macho_map.py` — FILESET parser; vmaddr⇄fileoffset across all segments + kexts.
-* `find_strings.py` — locate the anchor cstrings and their vmaddrs.
-* `xref_fast.py` — raw‑word ADRP+ADD / ADR / ADRP+LDR xref scanner (alignment‑safe).
-* `disasm.py <va_start> <va_end>` — annotated disassembler (string refs, BL targets).
-* `patch_md0_size.py [--emit-bytes OUT]` — **semantic** finder + Keystone widen plan;
+* `macho_map.py` - FILESET parser; vmaddr⇄fileoffset across all segments + kexts.
+* `find_strings.py` - locate the anchor cstrings and their vmaddrs.
+* `xref_fast.py` - raw‑word ADRP+ADD / ADR / ADRP+LDR xref scanner (alignment‑safe).
+* `disasm.py <va_start> <va_end>` - annotated disassembler (string refs, BL targets).
+* `patch_md0_size.py [--emit-bytes OUT]` - **semantic** finder + Keystone widen plan;
   prints before/after for all six edits; optionally writes a patched copy.
 
 ### Reproduction one‑liners

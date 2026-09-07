@@ -6,7 +6,7 @@ main init consults them.
 
 > **Scope of this deliverable:** design + code only. Nothing here builds QEMU or
 > boots. The integration steps below are written as a **patch to apply later** to
-> `/Users/maliosdark/darwin-vm/qemu-sptm` — that live tree must NOT be edited now
+> `/Users/maliosdark/darwin-vm/qemu-sptm` - that live tree must NOT be edited now
 > (a concurrent task owns it). Apply the diffs described in
 > [Integration](#integration-apply-later) when the tree is free.
 
@@ -37,8 +37,8 @@ size `0x58` = **11 × 8-byte pointers**, section flags `0x09`
 (`S_MOD_INIT_FUNC_POINTERS`). Per the Mach-O ABI these are C++/runtime static
 constructors that the **image loader** runs *before* it calls the image's
 entrypoint. Our synthesized boot ERETs straight into CL4's entry and never runs
-them, so every registry the constructors would populate is empty — this is the
-single root cause behind the cascade of null-deref faults in UPDATES 4–8.
+them, so every registry the constructors would populate is empty - this is the
+single root cause behind the cascade of null-deref faults in UPDATES 4-8.
 
 The 11 constructor vmaddrs (decoded from the chained-fixup slots, which the
 loader's `apply_cl4_fixups()` already rebases to physical):
@@ -52,9 +52,9 @@ idx  vmaddr       phys (= rx_phys+off)   notes
  4   0xc01552bc   0x100069d92bc          paciza-signs pointers; 1 call (0xc0155344)
  5   0xc03c9868   0x10006c4d868          b 0xc039c864 (tail); tiny
  6   0xc04020e4   0x10006c860e4          3 calls; builds a subsystem table
- 7   0xc0402e98   0x10006c86e98          3 calls (0xc015b440/3dc/390 — string/registry helpers)
+ 7   0xc0402e98   0x10006c86e98          3 calls (0xc015b440/3dc/390 - string/registry helpers)
  8   0xc0437ef0   0x10006cbbef0          1 call (0xc03899cc)
- 9   0xc0439524   0x10006cbd524          4 calls; largest (109 ins) — registers several factories
+ 9   0xc0439524   0x10006cbd524          4 calls; largest (109 ins) - registers several factories
 10   0xc043a8a4   0x10006cbe8a4          4 calls (0xc039c3f0 ×2, 0xc0438850 ×2)
 ```
 
@@ -66,7 +66,7 @@ idx  vmaddr       phys (= rx_phys+off)   notes
   shape. They can be called **in array order with no arguments**.
 * **AAPCS callee-saved discipline.** Each constructor that uses `x19..x28`
   saves/restores them (`stp x20,x19,[sp,#-0x20]!` … `ldp … ; retab`). Therefore
-  `x19..x24` **survive across every constructor call** — the trampoline keeps all
+  `x19..x24` **survive across every constructor call** - the trampoline keeps all
   its loop state there.
 * **They need a stack.** Constructors `stp`/`ldp` to `[sp,...]`. At CL4 entry
   `SP == 0` (SPTM ERETs with SP=0; the entrypoint sets SP up *itself* only after
@@ -78,7 +78,7 @@ idx  vmaddr       phys (= rx_phys+off)   notes
   so a plain `blr`/`br`-based runner that never signs *its own* `x30` is
   PAC-agnostic and safe.
 
-### The two registries — and why running the ctors at entry is correct
+### The two registries - and why running the ctors at entry is correct
 
 CL4 has **two** distinct registry mechanisms:
 
@@ -97,9 +97,9 @@ CL4 has **two** distinct registry mechanisms:
 **Key correction to UPDATE 11:** UPDATE 11 asserted "no `msr tpidr_el0` anywhere
 in CL4 `__TEXT`" and concluded TPIDR is set by SPTM/GXF, so the ctors would need
 a pre-built per-thread context. A byte-accurate scan (linear capstone disasm
-desyncs — must scan the `0xd51bd040|Rt` encoding directly) shows **exactly one**
+desyncs - must scan the `0xd51bd040|Rt` encoding directly) shows **exactly one**
 `msr tpidr_el0, x0` at **`0xc00aa724`** (a 2-instruction setter `msr; ret`).
-**CL4 installs its own TPIDR_EL0** during domain setup — the per-thread context
+**CL4 installs its own TPIDR_EL0** during domain setup - the per-thread context
 is *not* required to pre-exist, and it is *not* something the constructor pass has
 to build.
 
@@ -107,7 +107,7 @@ Consequently the constructors are **TPIDR-independent table initializers**: none
 of the 11 reads `tpidr_el0` (all 50 `mrs tpidr_el0` sites lie outside the 11
 constructor bodies), and their direct callees that matter (`ctor[2]`→`0xc00a2b28`)
 write static `__DATA` tables. `ctor[2]` populating `0xc068e840` is exactly the
-domain-descriptor table that CL4's domain setup reads — the "garbage domain id
+domain-descriptor table that CL4's domain setup reads - the "garbage domain id
 `0x50`" fault (UPDATE 4/5) is that table being **empty because `ctor[2]` never
 ran**. Running the constructors at entry seeds the static tables so CL4's own
 domain setup then succeeds, installs TPIDR (`0xc00aa724`), and seeds the
@@ -115,7 +115,7 @@ per-thread registry itself.
 
 This also matches the real hardware order: the loader runs `__mod_init_func`
 **before** the entrypoint. Running them in a trampoline immediately ahead of
-`0x1000691d4f0` is the faithful reproduction — *not* a hack that fights ordering.
+`0x1000691d4f0` is the faithful reproduction - *not* a hack that fights ordering.
 
 ---
 
@@ -133,21 +133,21 @@ This also matches the real hardware order: the loader runs `__mod_init_func`
   (seeded by the ctors) let domain setup proceed. This removes a whole class of
   guesswork (correct context size, field layout, list-node ABI).
 * If, after running the ctors, a *later* fault shows the factory still returning
-  NULL, the fallback is the original probe idea — reserve a scratch cell and make
-  a specific registry non-empty — but the constructor pass should make that
+  NULL, the fallback is the original probe idea - reserve a scratch cell and make
+  a specific registry non-empty - but the constructor pass should make that
   unnecessary. Keep the existing `-cl4` domain-descriptor x1 probe in place
   (below) as belt-and-suspenders for the tag3 deref.
 
 ---
 
-## 3. Mechanism — recommendation
+## 3. Mechanism - recommendation
 
 **Recommended: option (i), a guest ARM64 trampoline**, diverted to by the
 existing `exception_return` hook. Rationale:
 
 * It runs **inside CL4's own guarded context** (MMU-off, FP-on, PAC as CL4 sees
   it), so PAC/`retab`, `adrp`-to-physical, and Normal-memory semantics are exactly
-  what the constructors expect — no need to reproduce any of that QEMU-side.
+  what the constructors expect - no need to reproduce any of that QEMU-side.
 * Minimal QEMU surface: **one extra global + a 3-line divert** in the hook that
   already exists (`g_cl4_entry_pc` / `g_cl4_x1_inject`). No new exit path, no
   per-instruction driver.
@@ -219,15 +219,15 @@ CL4-scratch (0x8000):
 
 Keeping this inside the *existing* region avoids adding a new descriptor to the
 region list, so SPTM's `validate_region_order` is untouched (adding regions is
-what tripped it in UPDATES 1–3). Code + stack sharing one region is fine: in the
+what tripped it in UPDATES 1-3). Code + stack sharing one region is fine: in the
 guarded domain, MMU is off and there are no page-permission checks (that is why
-guarded FP/Normal/align fixes A–C were needed at all).
+guarded FP/Normal/align fixes A-C were needed at all).
 
 ---
 
 ## Integration (apply later)
 
-Two files change. **Do not edit the live tree now** — this is the patch to apply
+Two files change. **Do not edit the live tree now** - this is the patch to apply
 when `/Users/maliosdark/darwin-vm/qemu-sptm` is free. Line numbers are indicative;
 match on context.
 
@@ -290,7 +290,7 @@ match on context.
    }
    ```
 
-   Notes: `0x698fc0` is a fixed section offset from the CL4 image base — it is a
+   Notes: `0x698fc0` is a fixed section offset from the CL4 image base - it is a
    *file/section constant* of the CL4 macho, not a per-boot magic number. If you
    prefer zero literals, resolve it at load time with
    `macho_find_sect(cl4_macho, "__DATA", "__mod_init_func")` and use its
@@ -351,19 +351,19 @@ is in place; the trampoline saves it (`x20`) and restores it before entering CL4
 * **Ctor internal faults on first real run.** Some constructors call deep helper
   chains (ctor[9] has 4 calls, 109 ins). If one of them *does* transitively read
   TPIDR before CL4 installs it, it could fault. Mitigation if that happens: run
-  the constructors in **two waves** — the TPIDR-independent table seeders first
+  the constructors in **two waves** - the TPIDR-independent table seeders first
   (at least `ctor[2]`), let CL4 reach the point just after `msr tpidr_el0`
   (`0xc00aa728`, phys `rx+0xaa728`), and run the remainder from a second divert
   gated on that PC. The trampoline is unchanged; only the loader would compute a
   second gate PC and split `Larray`/`Larray_end`. This is the fallback, not the
-  plan — static analysis shows no direct TPIDR use in any of the 11.
+  plan - static analysis shows no direct TPIDR use in any of the 11.
 * **Scratch stack size.** 32 KiB is generous for C++ static ctors; if a ctor
   recurses unexpectedly, bump `CL4_SCRATCH_SZ`. The stack and code share the
   region; ensure `STACKTOP` (top) never grows down into the code at `+0x80`
-  — 32 KiB vs 104 bytes gives ~32 KiB of headroom.
+ - 32 KiB vs 104 bytes gives ~32 KiB of headroom.
 * **`0x698fc0` section offset.** Stable for this CL4 build; prefer the
   `macho_find_sect` form if you expect the component to be re-extracted.
-* **PAC keys.** Assumes QEMU's guarded-domain PAC round-trips (it does today —
+* **PAC keys.** Assumes QEMU's guarded-domain PAC round-trips (it does today - 
   CL4 already runs `retab`). The trampoline itself is PAC-free, so only the
   constructors' self-balanced `pacibsp/retab` matters, and that is unchanged from
   current behaviour.
@@ -372,8 +372,8 @@ is in place; the trampoline saves it (`x20`) and restores it before entering CL4
 
 ## Files
 
-* `gen_trampoline.py` — keystone generator; prints the C byte array + pool
+* `gen_trampoline.py` - keystone generator; prints the C byte array + pool
   offsets, writes `trampoline.bin` / `trampoline.hex`.
-* `trampoline.bin` / `trampoline.hex` — assembled 104-byte blob.
-* `analyze_ctors.py` — capstone helper that reproduces every finding above
+* `trampoline.bin` / `trampoline.hex` - assembled 104-byte blob.
+* `analyze_ctors.py` - capstone helper that reproduces every finding above
   (constructor bodies, registrar/factory/register, TPIDR scan, entry).

@@ -56,7 +56,7 @@ The stock device tree shows what the real display path expects:
 
 `DCP` = Display CoProcessor. On A18 the display is not directly programmable;
 it is driven by a coprocessor running its own firmware. Modern XNU does not
-render a legacy boot console from `boot_args.Video` — it delegates to the DCP
+render a legacy boot console from `boot_args.Video` - it delegates to the DCP
 driver stack. That is why filling `Video` and `/vram` changes nothing.
 
 This is consistent with ChefKiss Inferno supporting **only** the A13 (t8030),
@@ -92,8 +92,8 @@ dumped via QMP `pmemsave` after a 48s boot in each case:
 | `-v` (no serial= at all)             | 0 | 0 |
 | `serial=0 -v` (serial console off)   | 0 | 0 |
 
-Even with the serial console fully disabled — where XNU has nowhere else to
-send output — nothing is drawn. The legacy boot-console path is simply not
+Even with the serial console fully disabled - where XNU has nowhere else to
+send output - nothing is drawn. The legacy boot-console path is simply not
 taken on this platform.
 
 ## Conclusion
@@ -126,7 +126,7 @@ kernel log contains no display messages at all.
 `adt_get_prop_len()` in `hw/arm/apple_dtree.c` dereferenced the result of
 `find_prop_in_node()` without a NULL check, so asking for a property a node
 does not have faults. Because QEMU installs its own SIGSEGV handlers, this
-does not crash cleanly — the guest simply hangs with no output, which is very
+does not crash cleanly - the guest simply hangs with no output, which is very
 hard to attribute. Fixed by returning 0 when the property is absent.
 
 This bug cost real debugging time and poisoned an entire bisect run, because
@@ -175,15 +175,15 @@ whose driver stops the boot dead. Everything else in the chain tolerates a
 dummy device.
 
 Note also that with `disp0` alone un-muted and every range traced, **zero MMIO
-accesses** were recorded — the display driver never attaches without its DART.
+accesses** were recorded - the display driver never attaches without its DART.
 
 ## Recommended order of work
 
-1. `dart,t8110` — a real device model. Linux's `drivers/iommu/apple-dart.c`
+1. `dart,t8110` - a real device model. Linux's `drivers/iommu/apple-dart.c`
    (GPL-2) documents this exact `compatible` and is a license-compatible
    reference for the register layout.
-2. `disp0,t8140` — the display pipe.
-3. `iop,ascwrap-v6` — the DCP: an RTBuddy v2 coprocessor with its own firmware
+2. `disp0,t8140` - the display pipe.
+3. `iop,ascwrap-v6` - the DCP: an RTBuddy v2 coprocessor with its own firmware
    and mailbox protocol. This is the large one.
 
 ### Licensing caution
@@ -204,7 +204,7 @@ own code is **AGPL-3.0**, while qemu-sptm is GPL-2. Do not copy it. Their
 count; TLB_CMD always reads back not-busy so flush polls terminate; TCR/TTBR
 are backed by storage; PROTECT/ENABLE_STREAMS are tracked.
 
-**Do not copy ChefKiss Inferno's `dart.c`** — their own code is AGPL-3.0 and
+**Do not copy ChefKiss Inferno's `dart.c`** - their own code is AGPL-3.0 and
 qemu-sptm is GPL-2. (Their `dart-stub.c` is not a hardware stub at all, only a
 monitor command handler.)
 
@@ -219,7 +219,7 @@ Results, all with the same firmware:
 
 The model itself is harmless (stock tree still boots with it mapped), and it
 does **not** unblock the DART node. So the blocker is not the driver's register
-interaction — providing correct register semantics changes nothing.
+interaction - providing correct register semantics changes nothing.
 
 ## Where it hangs
 
@@ -229,7 +229,7 @@ Sampling the CPU over QMP while hung:
 PC=fffffff0070f75a8  PSTATE=...400033c8  -Z-- EL2t   status: running
 ```
 
-The guest is *running*, not halted or panicking — it is spinning. The PC is in
+The guest is *running*, not halted or panicking - it is spinning. The PC is in
 the kernelcache's address range and below the lowest kext
 (`com.apple.kec.Libm` @ 0xfffffff007118000), i.e. in the base kernel, not in a
 driver. This is consistent with the failure being in early XNU device tree
@@ -246,13 +246,13 @@ The load slide has to be computed before this address can be named.
 **Next step:** derive the runtime slide (log `bkc_mi.virtlo`, `args.virtBase`
 and the SPTM-relocated base at boot), apply it to the sampled PC, and only
 then disassemble. Naming that loop is what tells us which early-boot consumer
-of the DART node is spinning — plausibly DAPF (Device Address Permission
+of the DART node is spinning - plausibly DAPF (Device Address Permission
 Filter) programming, which is SPTM-era and would explain why it happens before
 any console output.
 
 ---
 
-# Part 4: BREAKTHROUGH — SPTM was the blocker, and it told us why
+# Part 4: BREAKTHROUGH - SPTM was the blocker, and it told us why
 
 ## The guest was not hung, it was parked
 
@@ -271,7 +271,7 @@ bkc runtime base  = 0xFFFFFFF027004000     -> slide 0x20000000
 ```
 
 Since SPTM sits at `bkc_runtime - 2 * SPTM_EXPECTED_STRIDE`, SPTM's runtime
-base is `0xFFFFFFF007004000` — so the PC is **inside SPTM**, at offset
+base is `0xFFFFFFF007004000` - so the PC is **inside SPTM**, at offset
 `0xF35A8`, in `__TEXT_EXEC`. Not in XNU at all.
 
 Disassembling SPTM there:
@@ -299,7 +299,7 @@ instance whose device tree node has no `dart-id` property.**
 
 ## The fix
 
-No DART node in the stock Apple device tree has `dart-id` — all 25 of them
+No DART node in the stock Apple device tree has `dart-id` - all 25 of them
 lack it. iBoot injects it before handing the tree to SPTM, and darwin-vm never
 did, because it had never brought a DART up.
 
@@ -325,8 +325,8 @@ kernel log. The nodes exist and SPTM accepts them, but IOKit never matches or
 starts `AppleMobileDispH17P-DCP` / `AppleDCP`.
 
 The most likely reason is the environment: this is a **restore ramdisk**,
-which has no reason to bring up the display stack. Confirming that — and
-booting a full root filesystem instead — is the next thing to establish,
+which has no reason to bring up the display stack. Confirming that - and
+booting a full root filesystem instead - is the next thing to establish,
 before any more device emulation work is done.
 
 ---
@@ -355,7 +355,7 @@ xcrun --sdk iphoneos clang -arch arm64e -dynamiclib -o libncurses.5.4.dylib stub
 ```
 
 A socket-backed serial (`-serial unix:...,server,nowait`) gives a scriptable
-root shell. Input must be trickled a character at a time — blasting a whole
+root shell. Input must be trickled a character at a time - blasting a whole
 line overruns the FIFO and silently mangles pipes into separate commands.
 
 ## What the IORegistry shows with the whole chain enabled
@@ -386,7 +386,7 @@ dcp0-expert@F82B8044   registered, !matched, busy 1   (AppleDCPExpert !registere
 
 With every display register range mapped as a logging dummy and the drivers
 sitting `busy` for 21+ seconds, there are still **zero MMIO accesses**. The
-drivers are not spinning on hardware — they are blocked *before* touching it,
+drivers are not spinning on hardware - they are blocked *before* touching it,
 waiting on a dependency.
 
 Two candidates, both pointing the same way:
@@ -411,7 +411,7 @@ Not achieved: any pixel. `AppleDCP` and `AppleMobileDispH17P-DCP` never
 complete matching.
 
 Next, in order:
-1. Determine what `dcp@2E00000` is blocked on — instrument IOKit matching, or
+1. Determine what `dcp@2E00000` is blocked on - instrument IOKit matching, or
    dump the nub's properties and its `IOResources` waits.
 2. Establish whether DCP firmware is present anywhere in the ramdisk.
 3. If it is absent, the path is booting the full root filesystem, not more
@@ -419,7 +419,7 @@ Next, in order:
 
 ---
 
-# Part 6: precise diagnosis — the missing link is RTBuddy
+# Part 6: precise diagnosis - the missing link is RTBuddy
 
 ## DCP firmware is absent from the ramdisk but present in the IPSW
 
@@ -476,7 +476,7 @@ IOMFBSwapIORequest      0     IOMFBEvtMonTrampoline  0
 ```
 
 **The entire display stack above the coprocessor is alive and waiting.** The
-one missing link is `RTBuddy` — the ASC/RTBuddy coprocessor runtime — which
+one missing link is `RTBuddy` - the ASC/RTBuddy coprocessor runtime - which
 never instantiates, and with it nothing firmware-related does either.
 
 This is why there are no MMIO accesses: the DCP driver never gets far enough to
@@ -489,8 +489,8 @@ Emulate the **ASC/RTBuddy v6 mailbox** on `arm-io/dcp`
 0x412E2C000+0x3C008) and load `t8140dcp_restore.im4p` as the coprocessor's
 firmware, the way iBoot does.
 
-That is a bounded, well-defined target — a mailbox protocol and a firmware
-load — not open-ended reverse engineering. It is also the last thing standing
+That is a bounded, well-defined target - a mailbox protocol and a firmware
+load - not open-ended reverse engineering. It is also the last thing standing
 between this VM and `IOMFB` producing frames.
 
 Note `arm-io/dcp/iop-dcp-nub` carries `no-firmware-service` and
@@ -499,7 +499,7 @@ choosing how to hand the firmware over.
 
 ---
 
-# Part 7: the real dependency — darwin-vm has no interrupt controller
+# Part 7: the real dependency - darwin-vm has no interrupt controller
 
 ## What `init_aic` actually is
 
@@ -553,8 +553,8 @@ with no interrupt controller the guest is never told a message arrived, so
 
 ## Corrected dependency chain
 
-1. ~~`dart,t8110`~~ — **done** (`dart-id` synthesis; driver matches, mappers publish)
-2. **`aic,3` — a real interrupt controller.** Currently a stub that cannot
+1. ~~`dart,t8110`~~ - **done** (`dart-id` synthesis; driver matches, mappers publish)
+2. **`aic,3` - a real interrupt controller.** Currently a stub that cannot
    deliver anything. Reference: Linux `drivers/irqchip/irq-apple-aic.c` (GPL-2).
 3. ASC/RTBuddy v6 mailbox on `arm-io/dcp` + RTKit management handshake.
 4. The DCP itself: either execute the real `t8140dcp_restore.im4p` on an
@@ -567,7 +567,7 @@ with no interrupt controller the guest is never told a message arrived, so
 Step 2 is the honest blocker and it was invisible until now: darwin-vm is built
 to debug a kernel to a root shell, not to bring up devices, so it never needed
 interrupts. Every device-driven subsystem in this VM is dead for the same
-reason — the DCP is simply the one we happened to chase.
+reason - the DCP is simply the one we happened to chase.
 
 ---
 
@@ -619,7 +619,7 @@ in this VM was previously unreachable for want of this.
 Masking is not modelled: `intmaskset`/`intmaskclear` writes are accepted and
 ignored, so a raised line is delivered even if the guest masked it. During
 bring-up a spurious interrupt is a far better failure mode than a lost one, but
-this must be implemented before anything depends on masking semantics — note
+this must be implemented before anything depends on masking semantics - note
 from the trace that iOS masks *everything* at init and unmasks selectively.
 
 ## Next
@@ -627,12 +627,12 @@ from the trace that iOS masks *everything* at init and unmasks selectively.
 Wire the ASC/RTBuddy v6 mailbox on `arm-io/dcp` to one of these lines
 (`interrupts = <a8020000 a7020000 aa020000 a9020000>` on that node, i.e. IRQs
 0x2a8/0x2a7/0x2aa/0x2a9) and run the RTKit management handshake. Only then can
-`RTBuddy` instantiate — and only after that does `t8140dcp_restore.im4p`
+`RTBuddy` instantiate - and only after that does `t8140dcp_restore.im4p`
 become relevant.
 
 ---
 
-# Part 9: conclusive — the display kexts are never loaded
+# Part 9: conclusive - the display kexts are never loaded
 
 ## Built and verified in this pass
 
@@ -666,7 +666,7 @@ which means those kexts were never loaded and started.
 
 That is what `dcp@2E00000  registered, !matched, busy 1 (24072 ms)` actually
 means: IOKit is holding the nub open waiting for a driver that will never
-arrive. It is not blocked on hardware — which is consistent with the total
+arrive. It is not blocked on hardware - which is consistent with the total
 absence of MMIO traffic against every display range, and with the mailbox
 sitting untouched.
 
@@ -679,7 +679,7 @@ device emulation can change this.** The remaining path is environmental:
 1. Boot a full root filesystem instead of the restore ramdisk, so the display
    kexts are loaded at all.
 2. Only then do the ASC mailbox, RTKit handshake and DCP firmware become
-   reachable — and only then is it meaningful to find out whether they work.
+   reachable - and only then is it meaningful to find out whether they work.
 
 Everything built here (AIC, DART, ASC/RTKit, framebuffer plumbing, tracing,
 the guest shell, the ioreg stub) remains necessary for step 2. None of it is
@@ -688,7 +688,7 @@ obtaining and booting the ~8GB root filesystem, not writing device models.
 
 ---
 
-# Part 10: asking from inside — a userspace IOKit client
+# Part 10: asking from inside - a userspace IOKit client
 
 ## Why not a kext
 
@@ -703,7 +703,7 @@ binary-injection path is already proven (the `libncurses` stub).
 it walks `IOServiceGetMatchingServices` for every display-related class and
 prints the registry path and key properties of whatever it finds. IOKit headers
 are absent from the public iOS SDK, so the handful of calls used are declared
-by hand and resolved against the on-device frameworks — the same ones `ioreg`
+by hand and resolved against the on-device frameworks - the same ones `ioreg`
 links against.
 
 ```sh
@@ -745,7 +745,7 @@ registered in the `IOService` plane. Nothing is actually published.
 
 The display service tree terminates at the crossbar and its connection
 manager. There is no framebuffer to attach to, in kernel or userspace, because
-the component that publishes one is the DCP — whose driver the restore ramdisk
+the component that publishes one is the DCP - whose driver the restore ramdisk
 never loads.
 
 **The blocker is environmental, not emulation.** Booting a full root filesystem
@@ -770,7 +770,7 @@ syslogd
 There is **no `kernelmanagerd`**. That is the daemon which services kernel
 requests to start kexts that are not boot-required. The kernel wants
 `AppleMobileDispH17P-DCP` started, asks userspace, nothing answers, and the nub
-stays `busy` forever — precisely what `ioreg` shows.
+stays `busy` forever - precisely what `ioreg` shows.
 
 Importantly the kext code is **already resident**: it lives in the boot kernel
 collection. It is loaded but never *started*. So the operation needed is
@@ -779,7 +779,7 @@ collection. It is loaded but never *started*. So the operation needed is
 ## What userspace can and cannot reach (measured on device)
 
 `kexttrig.c` resolves candidate entry points against the device's own IOKit
-(`/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit` — note the
+(`/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit` - note the
 `Versions/A`, without it `dlopen` fails since there is no dyld cache):
 
 ```
@@ -795,7 +795,7 @@ kext_request  (syscall)             present
 
 `kstart.c` drives the `kext_request` syscall directly with a serialised plist
 using the classic predicate/arguments shape. Every call returned
-`kr=0x10000003`, **including the deliberate control** — the well-known
+`kr=0x10000003`, **including the deliberate control** - the well-known
 `Get Loaded Kext Info` predicate, which certainly exists.
 
 An identical failure on a known-good predicate means the fault is on our side:
@@ -808,14 +808,14 @@ interface substantially, so the old kextd protocol should not be assumed.
 
 ## Where this leaves the two routes
 
-**Userspace kext start** — unproven. Needs the current XNU sources for the real
+**Userspace kext start** - unproven. Needs the current XNU sources for the real
 `kext_request` ABI and the modern start protocol, and it may no longer be
 reachable from userspace at all.
 
-**Full root filesystem** — the filesystem is `094-13182-141.dmg.aea`, **8.7 GB
+**Full root filesystem** - the filesystem is `094-13182-141.dmg.aea`, **8.7 GB
 and AEA-encrypted**. Worse, and decisively: `hw/arm/darwin.c` creates
 `uart`, `aic`, `sep` (stub), `cpu_impl`, `ram`, `dart`, the framebuffer and
-unimplemented stubs — **there is no storage device of any kind**. Booting from
+unimplemented stubs - **there is no storage device of any kind**. Booting from
 a root filesystem would require implementing Apple's ANS2 storage stack, itself
 another RTBuddy-class coprocessor. That is a larger project than the DCP.
 
@@ -825,7 +825,7 @@ another RTBuddy-class coprocessor. That is a larger project than the DCP.
 
 ## The protocol keys were right all along
 
-Strings pulled straight from the running kernelcache (`bootkc`) — ground truth
+Strings pulled straight from the running kernelcache (`bootkc`) - ground truth
 for this exact iOS build, better than upstream headers:
 
 ```
@@ -837,8 +837,8 @@ predicates present: Start, Stop, Unload, Get Loaded Kext Info,
 error string: "Recieved kext request from user space with no predicate."
 ```
 
-So the request shape used by `kstart.c` — predicate `Start`, arguments dict
-keyed by `CFBundleIdentifier` — matches what this kernel parses.
+So the request shape used by `kstart.c` - predicate `Start`, arguments dict
+keyed by `CFBundleIdentifier` - matches what this kernel parses.
 
 ## The error decodes exactly
 
@@ -861,8 +861,8 @@ bl   0x43bc                ; -> mach_msg
 ```
 
 It sends to a **service port read from a global**. In the restore ramdisk that
-port was never registered, because the daemon that registers it —
-`kernelmanagerd` — is not among the ten LaunchDaemons present. Every predicate
+port was never registered, because the daemon that registers it - 
+`kernelmanagerd` - is not among the ten LaunchDaemons present. Every predicate
 fails identically, control included, before the kernel ever sees the request.
 
 ## Conclusion for route A
@@ -870,7 +870,7 @@ fails identically, control included, before the kernel ever sees the request.
 Starting the display kext from userspace is **not reachable in this
 environment**, and not because of an ABI mistake. The mechanism routes through
 a Mach service that does not exist here. Providing that service means providing
-`kernelmanagerd`, which lives in the full root filesystem — which collapses
+`kernelmanagerd`, which lives in the full root filesystem - which collapses
 route A into route B.
 
 Both remaining routes therefore converge on the same prerequisite: **boot the
@@ -879,7 +879,7 @@ at all (no NVMe, no ANS2, nothing), plus an 8.7 GB AEA-encrypted image.
 
 ---
 
-# Part 13: the root filesystem, obtained — and the 4 GB wall
+# Part 13: the root filesystem, obtained - and the 4 GB wall
 
 ## Obtained and decrypted
 
@@ -893,12 +893,12 @@ ipsw fw aea --key-val "$KEY" -o decrypted 094-13182-141.dmg.aea
 ```
 
 Result: `094-13182-141.dmg`, **9.3 GB of valid APFS**, which mounts on the host
-and contains the real system — **661 LaunchDaemons** (the restore ramdisk has
+and contains the real system - **661 LaunchDaemons** (the restore ramdisk has
 10) and **`/System/Library/CoreServices/SpringBoard.app`**.
 
 Note: iOS has no `kernelmanagerd`; only `driverkitd`, which is present in the
 restore ramdisk too. The earlier hypothesis about a missing kext daemon was
-wrong. There are also no `KernelCollections` on the filesystem — the display
+wrong. There are also no `KernelCollections` on the filesystem - the display
 kexts really do live in the boot kernelcache.
 
 ## darwin-vm has no storage, so the only route is the ramdisk
@@ -955,13 +955,13 @@ single ramdisk cannot express.
 ## Conclusion
 
 The ramdisk route to a full system is closed, for two independent reasons. The
-prerequisite is a **real storage controller** — Apple's ANS2, itself an
+prerequisite is a **real storage controller** - Apple's ANS2, itself an
 RTBuddy-class coprocessor with NVMe on top. That is the gate, and it is a
 larger project than everything built in this session combined.
 
 ---
 
-# Part 14: ANS2 — RTBuddy comes alive
+# Part 14: ANS2 - RTBuddy comes alive
 
 ## The storage coprocessor uses the same mailbox as the display one
 
@@ -992,7 +992,7 @@ APPLE_NVMMU_NUM_TCBS              0x28100   TCB_BASE 0x28108/0x28110
 APPLE_NVMMU_TCB_INVAL             0x28118   TCB_STAT 0x28120
 ```
 
-`CPU_CONTROL` is how a coprocessor is taken out of reset — the mailbox now
+`CPU_CONTROL` is how a coprocessor is taken out of reset - the mailbox now
 sends `HELLO` on the RUN bit rather than on any write, which is what the
 hardware actually does. `BOOT_STATUS` returns the magic once running.
 
@@ -1012,7 +1012,7 @@ AppleANS3NVMeController::probe: Found (ANS2) provider and linear-sq,  score 3000
 
 **`RTBuddy` instantiates.** That class sat at zero for the entire investigation
 and was the thing the DCP was missing. Four Apple NVMe controller drivers probe
-the emulated hardware and return match scores — they recognise the provider,
+the emulated hardware and return match scores - they recognise the provider,
 the coastguard (SART) and the linear submission queue.
 
 This validates the whole lower stack built here: the interrupt controller, the
@@ -1021,14 +1021,14 @@ DARTs and the ASC mailbox are real enough for Apple's own drivers to accept.
 ## Where it stops
 
 The drivers stay at `probe`. Over 150 seconds none of them calls `start()`, and
-the mailbox is never touched — no `CPU_CONTROL` write, so no `HELLO`, so no
+the mailbox is never touched - no `CPU_CONTROL` write, so no `HELLO`, so no
 RTKit handshake. Same shape as the DCP: recognition happens, start does not.
 
 Remaining for a working disk, in order:
 
 1. Find why matching stops after `probe` (highest scorer is
    `AppleANS3CGv2Controller` at 500000).
-2. Implement the NVMe data path: Apple's variant is not stock NVMe — linear
+2. Implement the NVMe data path: Apple's variant is not stock NVMe - linear
    submission queues, custom doorbells, and the NVMMU with Translation Control
    Blocks. QEMU's generic NVMe model does not fit without work.
 3. Back it with the decrypted `094-13182-141.dmg`.
@@ -1060,7 +1060,7 @@ are published in the ADT:
 [darwin] ans firmware: 4971176 bytes at 0x101FA000000, region 0x6000000
 ```
 
-The image itself is `Firmware/rans.t8140.release.im4p` from the IPSW —
+The image itself is `Firmware/rans.t8140.release.im4p` from the IPSW - 
 4.97 MB, a Mach-O arm64e *preload* executable, i.e. meant to be placed at a
 fixed address and run by the coprocessor core.
 
@@ -1077,18 +1077,18 @@ By this point the ANS driver has been given, one at a time:
 |---|---|
 | working interrupt controller | provided (AIC v3, iOS enables it) |
 | IOMMU (`dart,t8110`) | provided, driver matched, mappers published |
-| SART / coastguard | matched, `busy 0` — fully done |
+| SART / coastguard | matched, `busy 0` - fully done |
 | ASC mailbox with correct CPU_CONTROL/boot semantics | provided |
 | NVMe register window (`BOOT_STATUS`, doorbells, NVMMU) | provided |
 | coprocessor firmware carve-out | provided |
 
 and the nub reaches `registered, **matched**, busy 1`, with the whole driver
-stack instantiated — `RTBuddy`, `RTBuddyService`, `AppleA7IOPNub`,
+stack instantiated - `RTBuddy`, `RTBuddyService`, `AppleA7IOPNub`,
 `AppleANS3NVMeController`, `IONVMeController` and some twenty RTBuddy decoders.
 
 None of it causes `start()` to run.
 
-**Two independent coprocessors — ANS and DCP — behave identically after six
+**Two independent coprocessors - ANS and DCP - behave identically after six
 different dependencies were satisfied.** That is not a missing device. The
 common cause is upstream, in how IOKit matching proceeds (or does not) in this
 restore-ramdisk environment.
@@ -1105,7 +1105,7 @@ matched nub here**". Candidates worth testing, cheapest first:
 3. Whether a userspace agent present only in the full OS is what advances
    matching past probe.
 
-Everything built here stands regardless — it is all prerequisite work, and the
+Everything built here stands regardless - it is all prerequisite work, and the
 class census proves Apple's own drivers accept it.
 
 ---
@@ -1131,7 +1131,7 @@ AppleDisplayCrossbar :: AppleT602XDisplayCrossbar
 ```
 
 **The display driver never attaches to the `dcp` nub at all.** Its provider is
-`RTBuddyEndpointService` and it matches an endpoint *named* `DCPEndpoint24` —
+`RTBuddyEndpointService` and it matches an endpoint *named* `DCPEndpoint24` - 
 an RTKit endpoint that RTBuddy publishes only once the DCP coprocessor is
 running and has enumerated its endpoints in the EPMAP exchange. So the chain is:
 
@@ -1144,7 +1144,7 @@ power/clock ungate -> CPU_CONTROL RUN -> HELLO -> EPMAP -> endpoint 0x24
 Only the crossbar matches a plain `AppleARMIODevice`, which is exactly why it is
 the single display driver that runs today.
 
-## PMGR implemented — and still nothing
+## PMGR implemented - and still nothing
 
 `arm-io/ans` declares `power-gates`/`clock-gates`, so RTBuddy must ungate the
 block before touching it. That register file was unmapped, and Apple's PS
@@ -1166,7 +1166,7 @@ WAS_PWRGATED/WAS_CLKGATED cleared. Fourteen PMGR windows are mapped.
 
 The ANS driver stack instantiates (`RTBuddy`, `RTBuddyService`,
 `AppleA7IOPNub`, `AppleANS3NVMeController`, `IONVMeController`), the nub reaches
-`matched`, four controllers probe and return scores — and **not one MMIO access
+`matched`, four controllers probe and return scores - and **not one MMIO access
 is made against any of it**: not the mailbox, not the NVMe window, not PMGR.
 
 Adding devices is no longer moving anything. `start()` is simply never called,
@@ -1197,8 +1197,8 @@ modelled is caught:
 
 Result across a full boot to root shell: **0 accesses.**
 
-The guest touches the UART and the AIC — both of which we model, so they land on
-their own devices — and nothing else. Not one MMIO access to any coprocessor
+The guest touches the UART and the AIC - both of which we model, so they land on
+their own devices - and nothing else. Not one MMIO access to any coprocessor
 register window, mapped or unmapped.
 
 ## What is therefore established
@@ -1220,7 +1220,7 @@ suspected.
 
 What remains is a kernel-behaviour question: why IOKit, in this restore-ramdisk
 environment, never advances a matched nub to `start()`. Answering it means
-attaching a kernel debugger and locating the matching thread — darwin-vm exposes
+attaching a kernel debugger and locating the matching thread - darwin-vm exposes
 a GDB stub (`-s`), and lldb is present. Note that connecting to the stub halts
 the guest, and that without kernel symbols the work is address-level: the SPTM
 and kernelcache slides derived in Part 4 are the starting point.
@@ -1233,7 +1233,7 @@ instantiate against it. The wall is above the hardware, not in it.
 
 ---
 
-# Part 18: the answer — iOS 27's display is brokered through exclaves
+# Part 18: the answer - iOS 27's display is brokered through exclaves
 
 ## Restoring iOS's own userspace changes the picture
 
@@ -1257,8 +1257,8 @@ CHECKPOINT END: MAIN:[0x0406] set_progress_0
 to draw the restore progress bar exactly as it would on real hardware, finds no
 display list, and continues without UI. Boot goes from 296 to 454 log lines.
 
-So the earlier hypothesis was right in kind — a client does request the display
-— but the request fails because no framebuffer service exists.
+So the earlier hypothesis was right in kind - a client does request the display
+ - but the request fails because no framebuffer service exists.
 
 ## Why the DCP never comes up, and ANS does
 
@@ -1293,8 +1293,8 @@ DCP exclave counterpart:  dcp-exclave-mailbox     iop,secure-rtbuddy-proxy
 
 and the matching personality carries `IOExclaveProxy = True`.
 
-**On iOS 27 the display coprocessor is brokered through exclaves** — Apple's
-secure world — which this machine does not implement at all. The storage
+**On iOS 27 the display coprocessor is brokered through exclaves** - Apple's
+secure world - which this machine does not implement at all. The storage
 coprocessor has no exclave dependency, which is precisely why it progressed and
 the display did not.
 
@@ -1325,14 +1325,14 @@ categorically larger undertaking than everything in this document.
 
 ---
 
-# Part 19: correction — it was a muted IOMMU mapper, not exclaves
+# Part 19: correction - it was a muted IOMMU mapper, not exclaves
 
 ## Retracting Part 18's conclusion
 
 Part 18 concluded the DCP is gated behind exclaves. **That was wrong**, and the
 device tree says so plainly: `exclave-assigned` appears on
 `dcp-exclave-mailbox`, `dcp-exclave-ioreporting`, `exdisplaypipe` and
-`exdisplaypipe-s-proxy` — but **not** on `arm-io/dcp` or `arm-io/disp0`. The
+`exdisplaypipe-s-proxy` - but **not** on `arm-io/dcp` or `arm-io/disp0`. The
 exclave path is an *alternative* (EXDisplayPipe), not the owner of the DCP.
 
 ## The real difference between ANS and DCP
@@ -1395,7 +1395,7 @@ mechanism, and finding it is the next question.
 
 ---
 
-# Part 20: synthesis — the coprocessors are demand-powered
+# Part 20: synthesis - the coprocessors are demand-powered
 
 ## Two more things tried
 
@@ -1414,7 +1414,7 @@ mailbox or PMGR.
 ## The pattern that explains everything
 
 RTBuddy never touches hardware for *either* coprocessor. Not the ASC mailbox,
-not PMGR, not the NVMe window — across every configuration tried. That is not
+not PMGR, not the NVMe window - across every configuration tried. That is not
 two broken devices; it is one consistent behaviour: **RTBuddy powers an IOP on
 demand, and nothing in this environment ever demands one.**
 
@@ -1433,7 +1433,7 @@ returned, and not one MMIO access anywhere.
 
 Something must *demand* the device strongly enough that RTBuddy powers the IOP:
 
-- For storage, real block I/O — which means booting from something other than a
+- For storage, real block I/O - which means booting from something other than a
   ramdisk, which needs storage. Circular in this environment.
 - For display, a client that forces matching on `IOMobileFramebuffer` rather
   than failing a lookup. `IOMobileFramebuffer` and `IOMobileFramebufferAP` are
@@ -1461,7 +1461,7 @@ waiting for demand this environment does not produce.
 runs a CFRunLoop for sixty seconds. All six registrations succeed (`kr=0x0`).
 
 **Nothing ever appears**, and IOKit itself reports `deferred rematching count 0`
-— there is no pending match work at all.
+ - there is no pending match work at all.
 
 So a standing matching request is not the missing demand either. Registering
 interest in a service does not cause IOKit to bring up the provider chain that
@@ -1479,10 +1479,10 @@ Tried, in order, each ruled out by measurement rather than assumption:
 | missing ASC mailbox | implemented for both coprocessors |
 | missing NVMe window / ANS firmware carve-out | implemented |
 | missing PMGR power gating | implemented |
-| missing IOMMU mapper node (`mapper-dcp`) | **real**, fixed — `RTBuddy(DCP)` now runs |
+| missing IOMMU mapper node (`mapper-dcp`) | **real**, fixed - `RTBuddy(DCP)` now runs |
 | DCP gated behind exclaves | **wrong**, retracted in Part 19 |
 | `user-power-managed` blocking auto power-on | flipped; no change |
-| userspace never asks | wrong — `restored_external` does ask |
+| userspace never asks | wrong - `restored_external` does ask |
 | a standing match request is the demand | **no**; nothing appears in 60s |
 
 What stands: iOS 27 boots to a root shell on an Intel host; `dcp@` and `ans@`
@@ -1500,7 +1500,7 @@ framebuffer service exists, so there are no pixels.
 If nothing demands an IOP, have the IOP announce itself.
 `DARWIN_ASC_ANNOUNCE=<seconds>` arms a timer that, after the guest has had time
 to attach its drivers, marks the coprocessor running and pushes `HELLO` into the
-I2A queue, raising its interrupt — as if firmware had booted on its own.
+I2A queue, raising its interrupt - as if firmware had booted on its own.
 
 ```
 [asc:dcp] self-announce: pretending firmware booted
@@ -1529,7 +1529,7 @@ controller written here is functional end to end, not merely accepted at init.
 
 With mailbox tracing on both directions: **zero reads, zero writes** after the
 interrupts land. The kernel takes the IRQ, reads IACK, gets hwirq 680, and
-dispatches it to nothing — RTBuddy has not armed a handler, because from its
+dispatches it to nothing - RTBuddy has not armed a handler, because from its
 point of view the IOP was never started.
 
 ## The deadlock, stated plainly
@@ -1547,7 +1547,7 @@ Worth noting for whoever continues: on real hardware **iBoot brings the DCP up
 and initialises the display before handing off to the kernel**. iOS may
 therefore expect to attach to an already-running coprocessor rather than to boot
 one. If so, the missing piece is not a driver or a device but the bootloader
-stage darwin-vm replaces — which is also consistent with `boot_args.Video` and
+stage darwin-vm replaces - which is also consistent with `boot_args.Video` and
 `/vram` being pre-filled on real devices, the very first thing this
 investigation found missing back in Part 1.
 
@@ -1555,9 +1555,9 @@ investigation found missing back in Part 1.
 
 `dt_fixup.py` gained `DCP_POWER_MODE=auto|already-on`:
 
-- `auto` — remove `user-power-managed`, set `power-managed` (RTBuddy powers the
+- `auto` - remove `user-power-managed`, set `power-managed` (RTBuddy powers the
   IOP itself at start)
-- `already-on` — remove every power flag and `quiesced`, set `dont-power-on`,
+- `already-on` - remove every power flag and `quiesced`, set `dont-power-on`,
   the state a real iBoot leaves the DCP in
 
 Combined with `DARWIN_ASC_ANNOUNCE` so the coprocessor also speaks first.
@@ -1579,7 +1579,7 @@ handler consumes it. No arrangement of device tree power flags changes this.
 Every hypothesis reachable from the emulator side has been tried and measured.
 The remaining gap is the bootloader stage darwin-vm does not implement: on real
 hardware iBoot boots the DCP, runs display initialisation, and hands the kernel
-a live framebuffer through `boot_args.Video` and `/vram` — the two fields this
+a live framebuffer through `boot_args.Video` and `/vram` - the two fields this
 investigation found zeroed on its very first day.
 
 Writing that stage means either executing `t8140dcp.im4p` on an emulated
@@ -1587,14 +1587,14 @@ coprocessor core, or reimplementing the DCP's IOMFB endpoint protocol. Both are
 substantial projects in their own right; the Asahi Linux effort for the far
 older M1 DCP is the closest comparison.
 
-What this document leaves behind is a working lower half — interrupt controller,
-IOMMUs, mailboxes, power gating, firmware carve-outs — all validated by Apple's
+What this document leaves behind is a working lower half - interrupt controller,
+IOMMUs, mailboxes, power gating, firmware carve-outs - all validated by Apple's
 own drivers instantiating on top of it, and a precise account of which
 hypotheses are dead and why.
 
 ---
 
-# Part 22: the chain, traced to its first link — and Part 19's retraction was wrong
+# Part 22: the chain, traced to its first link - and Part 19's retraction was wrong
 
 ## Where RTBuddy(DCP) actually fails
 
@@ -1620,7 +1620,7 @@ failed**. `RTBuddy::start()` returns unsuccessfully for the DCP, every time.
 
 Adding the missing `region-base`/`region-size` to `iop-dcp-nub` (via
 `DCP_REGION=1`, with the real `t8140dcp.im4p` loaded into a carve-out by
-`DARWIN_DCPFW=`) changes nothing — so "Unable to determine target memory for
+`DARWIN_DCPFW=`) changes nothing - so "Unable to determine target memory for
 firmware" was not the failure.
 
 ## The `routes` property
@@ -1640,7 +1640,7 @@ explains its other oddities: `no-firmware-service` (the exclave loads the
 firmware) and the absence of `region-base` (there is no normal-world carve-out
 to describe).
 
-Un-muting that node gets the proxy driver to instantiate — new behaviour:
+Un-muting that node gets the proxy driver to instantiate - new behaviour:
 
 ```
 SecureRTBuddyProxy(DCP-EXCLAVE): start
@@ -1681,7 +1681,7 @@ ExclaveOS provides com.apple.service.SecureRTBuddyDCP
 
 Every link above the first is now understood, and most of the hardware beneath
 them is implemented and validated. The first link is
-`094-14052-182.dmg.aea  Ap,ExclaveOS  164 MB` — a separate signed operating
+`094-14052-182.dmg.aea  Ap,ExclaveOS  164 MB` - a separate signed operating
 system for the secure world, which would have to be loaded and run, along with
 the SPTM-brokered transport between the two worlds.
 
@@ -1693,7 +1693,7 @@ That is the honest end of the road from this direction.
 
 `iop-dcp-nub` differs from `iop-ans-nub` in essentially one structural way: it
 has a `routes` property. `DCP_NO_ROUTES=1` removes it, asking whether RTBuddy
-falls back to the plain ASC mailbox — the path this emulator implements.
+falls back to the plain ASC mailbox - the path this emulator implements.
 
 It does not. It crashes.
 
@@ -1713,7 +1713,7 @@ unconditionally.
 
 Notably, this is also the **furthest the display driver has ever got**:
 `AppleDCP` appears in the backtrace, meaning it was loaded, linked against
-RTBuddy, and actually executed — rather than sitting unmatched as it had all
+RTBuddy, and actually executed - rather than sitting unmatched as it had all
 along.
 
 ## Established three independent ways
@@ -1733,7 +1733,7 @@ the mechanism; this part proves it is not optional.
 Loading and running `094-14052-182.dmg.aea` (`Ap,ExclaveOS`, 164 MB), plus the
 SPTM-brokered transport that lets the normal world reach
 `com.apple.service.SecureRTBuddyDCP`. That is a second operating system inside
-the emulator, not a device model — and it is where this road ends from the
+the emulator, not a device model - and it is where this road ends from the
 normal-world side.
 
 ## Platform-level exclave switches, and why they don't help
@@ -1745,14 +1745,14 @@ product:  exclaves-enabled = u32:0x1
           has-exclaves     = u32:0x1
 ```
 
-and the kernel has a full vocabulary for their absence — *"Exclaves not
+and the kernel has a full vocabulary for their absence - *"Exclaves not
 supported on this platform"*, *"Exclaves disabled"*, *"Exclaves are disabled,
-and this instance appears to need them to work."* — so a machine without them
+and this instance appears to need them to work."* - so a machine without them
 is a configuration Apple supports, not an unknown state.
 
 `NO_EXCLAVES=1` in `dt_fixup.py` sets both to zero. The guest boots cleanly (no
 panic), `launchd` still runs its `exclaves-boot` task and `init-exclavekit`
-still reports *"Skipping boot-task"* — and `RTBuddy(DCP)` is **unchanged**:
+still reports *"Skipping boot-task"* - and `RTBuddy(DCP)` is **unchanged**:
 
 ```
 dcp@2E00000        registered, matched
@@ -1768,7 +1768,7 @@ secure world.
 
 | attempt | result |
 |---|---|
-| `routes` present | clean failure — no exclave service to bind |
+| `routes` present | clean failure - no exclave service to bind |
 | `routes` removed | **kernel panic** (PC alignment; the route is dereferenced unconditionally) |
 | `exclaves-enabled=0`, `has-exclaves=0` | identical failure |
 | `region-base`/`region-size` + real `t8140dcp.im4p` | no change |
@@ -1781,7 +1781,7 @@ the description of the hardware.
 
 ---
 
-# Part 24: kernel patching is viable — and one gate is not enough
+# Part 24: kernel patching is viable - and one gate is not enough
 
 ## The patch itself works
 
@@ -1791,13 +1791,13 @@ symbols, by:
 1. parsing the `com.apple.driver.RTBuddy` fileset entry and its `__TEXT_EXEC`
    segment to map VA -> file offset (`ipsw macho disass -x` resolves the arm64e
    fixups so the string references are readable);
-2. finding the route loop by its two unique logging calls — `add x3,#0x3f4`
+2. finding the route loop by its two unique logging calls - `add x3,#0x3f4`
    ("Finding route %d") and `add x3,#0x412` ("Success route %d");
 3. identifying the failure branch between them: `cbz x0, <error>` at
    `0xFFFFFFF00A7C52F0`, taken when a route resolves to NULL.
 
 `patch_rtbuddy_route.py` anchors on those two adds (asserting their exact bytes)
-and NOPs the `cbz` with a Keystone-generated `nop` — no hardcoded offsets, no
+and NOPs the `cbz` with a Keystone-generated `nop` - no hardcoded offsets, no
 preassembled bytes, per the project's patcher rules.
 
 **SPTM accepts the modified kernelcache and boots to a root shell with no
@@ -1807,12 +1807,12 @@ checked in this environment (consistent with `silence_logs.py` already changing
 
 ## But it is not sufficient
 
-With the check NOPed, `RTBuddy(DCP)` still ends `!registered, busy 0` — start()
+With the check NOPed, `RTBuddy(DCP)` still ends `!registered, busy 0` - start()
 still fails, just later. The route object is used again past the branch that was
 removed; neutralising one gate does not make a NULL route usable.
 
 Fully removing the dependency would mean rewriting `RTBuddy::start()`'s
-initialisation flow so it never needs the route object — at which point it is
+initialisation flow so it never needs the route object - at which point it is
 reimplementing the driver, not patching a check. That is the same magnitude of
 work as providing the secure world it wants.
 
@@ -1822,7 +1822,7 @@ Two independent routes to the DCP now have their cost precisely bounded:
 
 - **Provide the secure world**: load and run `Ap,ExclaveOS` plus the SPTM
   transport for `com.apple.service.SecureRTBuddyDCP`.
-- **Patch it out**: rewrite RTBuddy's start path to not require the route — more
+- **Patch it out**: rewrite RTBuddy's start path to not require the route - more
   than a single-instruction patch, less than a full OS.
 
 The kernelcache was restored to its pre-RTBuddy-patch state (`silence_logs`
@@ -1854,7 +1854,7 @@ exclave) are equally DCP/secure-world bound.
 
 The route loop (`0xFFFFFFF00A7C50BC`) has a single caller (`0xFFFFFFF00A7BBCFC`)
 which, on return, does nothing but a stack-guard check and returns. So the loop
-completing "successfully" (as my NOP forces) does not make the DCP usable — the
+completing "successfully" (as my NOP forces) does not make the DCP usable - the
 route object it was supposed to populate is still null, and the failure
 resurfaces wherever that object is next dereferenced. The dependency is not one
 gate; it is the route object being real, which only the secure world provides.
@@ -1864,9 +1864,9 @@ gate; it is the route object being real, which only the secure world provides.
 Pixels on t8140 are computed by the DCP coprocessor executing its firmware.
 **No DCP is executing in this VM.** Confirmed three ways:
 
-1. device tree — the DCP's RTBuddy route leads to a secure-world service;
-2. driver personalities — every `disp0` driver is DCP/exclave-backed;
-3. runtime — zero MMIO to any display register across every configuration.
+1. device tree - the DCP's RTBuddy route leads to a secure-world service;
+2. driver personalities - every `disp0` driver is DCP/exclave-backed;
+3. runtime - zero MMIO to any display register across every configuration.
 
 Therefore no device-tree edit and no kernel patch can produce pixels, because
 none of them makes a coprocessor run. That is architecture, not a missing
@@ -1877,7 +1877,7 @@ switch.
 1. **Emulate the DCP.** Make the ASC mailbox answer the RTKit handshake and the
    IOMFB endpoint protocol with correct canned responses, then scan out the
    framebuffer memory. This is what ChefKiss did for the far simpler **t8030
-   (A13, iOS 14, no exclaves)** — and it was a large, sustained effort. On
+   (A13, iOS 14, no exclaves)** - and it was a large, sustained effort. On
    t8140 it is harder and sits behind requirement 2.
 2. **Stand up the secure world.** Load and run `Ap,ExclaveOS` (094-14052-182,
    164 MB) plus the SPTM-brokered transport, so `SecureRTBuddyDCP` exists and
@@ -1891,7 +1891,7 @@ work on the M1. Neither is a patch.
 The one place an actual touchable iOS home screen runs on an Intel host right
 now is **ChefKiss Inferno / qemu-t8030**: iPhone 11, iOS 14.x, booting to
 SpringBoard. It is old iOS, but it is a live screen, and its DCP is emulated
-exactly as project 1 above describes — proof the approach works, just not yet
+exactly as project 1 above describes - proof the approach works, just not yet
 for A18 + iOS 27 + exclaves.
 
 ---
@@ -1901,12 +1901,12 @@ for A18 + iOS 27 + exclaves.
 ## The normalize experiment
 
 `DCP_NORMALIZE=1` rewrites `iop-dcp-nub` to be structurally identical to
-`iop-ans-nub` — strips `routes`, `no-firmware-service`, `user-power-managed`,
+`iop-ans-nub` - strips `routes`, `no-firmware-service`, `user-power-managed`,
 `watchdog-enable`, `coredump-*`; adds `power-managed`, `region-base/size`,
 `continuous-time`, `crashlog-non-fatal`, `no-hibernate-sleep`, `shutdown-sleep`.
 Exactly the ANS shape, which is the IOP that comes up cleanly on its mailbox.
 
-Result: **kernel panic** — data abort, `far: 0x124` (null field read), inside a
+Result: **kernel panic** - data abort, `far: 0x124` (null field read), inside a
 kext, plus a nested PC-alignment panic. Same class of crash as removing `routes`
 outright.
 
@@ -1920,7 +1920,7 @@ normal object to use, so they crash on the null.
 This raises the cost of the "patch it out" route: it is not a device-tree edit
 and not one NOP, it is patching the driver code across `RTBuddy` and `AppleDCP`
 to build and use a *normal* mailbox route where they currently require the
-secure one — and then still emulating the DCP protocol on that mailbox, since no
+secure one - and then still emulating the DCP protocol on that mailbox, since no
 coprocessor executes.
 
 ## The coherent full plan, and its honest shape
@@ -1935,7 +1935,7 @@ To light pixels without the secure world:
    (the ChefKiss-t8030-scale piece), producing a framebuffer.
 5. Scan that framebuffer out through the DarwinFB device already written.
 
-Steps 1-3 are kernel patches — proven viable (SPTM accepts a modified KC), but
+Steps 1-3 are kernel patches - proven viable (SPTM accepts a modified KC), but
 now known to span multiple kexts and multiple gates each. Step 4 is a
 multi-week reverse-engineering project on its own; it is the piece that actually
 produces pixels, and everything else only clears the way to it.
@@ -1951,13 +1951,13 @@ shortcut within it has survived testing.
 
 A real coprocessor emulator, not a stub, now lives in the tree:
 
-- `apple_rtkit.c` (360 lines) — the RTKit engine: ASC mailbox registers, the
+- `apple_rtkit.c` (360 lines) - the RTKit engine: ASC mailbox registers, the
   HELLO / HELLO_REPLY / EPMAP / STARTEP / power handshake, an endpoint table
   with per-endpoint handlers, shared-buffer request handling, and verbatim
   logging of every unhandled message so the DCP protocol can be mapped from
   real traffic. Register layout and protocol from Linux `mailbox.c` / `rtkit.c`
   (GPL-2).
-- `apple_dcp.c` (92 lines) — advertises endpoint 0x24 (`DCPEndpoint24`, what
+- `apple_dcp.c` (92 lines) - advertises endpoint 0x24 (`DCPEndpoint24`, what
   `AppleDCPLinkServiceSoC` binds to) plus its neighbours, and traces the IOMFB
   RPC.
 - Headers, meson registration, and machine wiring (`DARWIN_RTKIT=1` for the
@@ -1988,22 +1988,22 @@ mailbox handler** in this environment:
 - `RTBuddy(DCP)::start()` dies on the secure-route dependency (Part 26) before
   it ever arms the DCP mailbox.
 - `RTBuddy(ANS2)` starts its service but arms its mailbox lazily, on first
-  storage demand — which never comes with a ramdisk root.
+  storage demand - which never comes with a ramdisk root.
 
 So the engine has no counterpart to talk to yet. Exercising it requires making
 an Apple driver arm its handler and drive the mailbox, which is the driver-side
 work:
 
 - patch `RTBuddy(DCP)`/`AppleDCP`/`SecureRTBuddyProxy` to boot the DCP IOP over
-  the normal mailbox instead of the secure route (multi-kext, multi-gate — the
+  the normal mailbox instead of the secure route (multi-kext, multi-gate - the
   blunt approaches panic), **or**
 - create genuine storage demand so `RTBuddy(ANS2)` arms its handler, then
   validate the engine against ANS first.
 
 ## Honest status
 
-The receiving half of the pixel path — a working RTKit coprocessor with proven
-interrupt delivery — now exists. The transmitting half (getting an Apple driver
+The receiving half of the pixel path - a working RTKit coprocessor with proven
+interrupt delivery - now exists. The transmitting half (getting an Apple driver
 to actually drive it) is the deep reverse-engineering that remains, and it is
 the part measured in weeks. Every piece built is preserved: `apple_rtkit.c`,
 `apple_dcp.c`, their headers, and this analysis.
@@ -2016,7 +2016,7 @@ the part measured in weeks. Every piece built is preserved: `apple_rtkit.c`,
 
 `nvme-coastguard-disable=1` is a real boot-arg (string
 `"NVMe CoastGuard disabled through boot-arg"`). With it, `AppleANS2CGv2Controller::probe`
-takes the disabled path — confirming the arg works — but the plain NVMe
+takes the disabled path - confirming the arg works - but the plain NVMe
 controllers **still never reach start()** and still never touch the mailbox
 (`CPU_CONTROL`=0, reads=0, writes=0).
 
@@ -2029,10 +2029,10 @@ sits `busy 1` (matching in progress, waiting), not failed.
 
 | driver | probe | start | drives mailbox |
 |---|---|---|---|
-| RTBuddy(ANS2)          | — | starts | no (lazy; waits for client demand) |
+| RTBuddy(ANS2)          | - | starts | no (lazy; waits for client demand) |
 | AppleANS3CGv2Controller | score 500000 | never completes | no |
 | AppleANS3NVMeController | score 300000 | never called | no |
-| RTBuddy(DCP)           | — | fails on secure route | no |
+| RTBuddy(DCP)           | - | fails on secure route | no |
 | AppleDCPLinkServiceSoC | needs endpoint 0x24 | never matched | no |
 
 Two independent coprocessor stacks, neither driven to the mailbox. The common
@@ -2048,7 +2048,7 @@ The RTKit engine (Part 27) is correct and its interrupt path is proven, but in
 this environment nothing arms a mailbox handler to drive it, because nothing
 reaches a coprocessor-client's start(). Exercising the engine needs one of:
 
-1. a real OS boot (drivers start eagerly) — blocked on having storage, which is
+1. a real OS boot (drivers start eagerly) - blocked on having storage, which is
    what we are trying to build (circular);
 2. an active restore driving the device stack (the companion-VM idevicerestore
    flow, Inferno-style);
@@ -2058,14 +2058,14 @@ reaches a coprocessor-client's start(). Exercising the engine needs one of:
 Option 3 is the only one reachable from here without a second VM, and it is the
 honest next lead: `RTBuddyUserClient` exists; a userspace client that opens it
 and requests an IOP boot would drive the engine directly, validating the whole
-handshake against a real Apple driver — the milestone before any IOMFB work.
+handshake against a real Apple driver - the milestone before any IOMFB work.
 
 ## Standing state
 
 Everything built is in the tree and boot-safe. `run.sh` still reaches a root
 shell. The receiving half of the display path exists and is verified to the
 interrupt boundary. The transmitting half is blocked on IOKit start() semantics
-in the restore environment, which is the next thing to break — by userspace
+in the restore environment, which is the next thing to break - by userspace
 RTBuddy control, or by moving off the restore ramdisk.
 
 ---
@@ -2076,14 +2076,14 @@ RTBuddy control, or by moving off the restore ramdisk.
 
 `init_ans_nvme()` (the ANS NVMe register window carrying `BOOT_STATUS`) was
 only called from `init_asc_mailbox()`. The RTKit engine path replaced that
-function, so in every `DARWIN_RTKIT_ANS` run the NVMe window was **not mapped** —
+function, so in every `DARWIN_RTKIT_ANS` run the NVMe window was **not mapped** - 
 the controller would have been polling `BOOT_STATUS` into unmapped space.
 
 Fixed: the RTKit path now maps the window too, and `BOOT_STATUS` follows the
 RTKit engine's running state rather than the old inline mailbox's.
 
 Result: still zero accesses. `AppleANS3CGv2Controller::start()` fails before it
-touches either window, so the missing mapping was not the cause — but it would
+touches either window, so the missing mapping was not the cause - but it would
 have been the next bug either way.
 
 ## IONVRAM is not published, and cannot be
@@ -2104,7 +2104,7 @@ IORTC     published
 IONVRAM   NOT published
 ```
 
-There is **no NVRAM node in the device tree at all** — only
+There is **no NVRAM node in the device tree at all** - only
 `chosen/nvram-proxy-data` (an 8 KB read-only snapshot that `dt_fixup.py` fills
 from `nvram.bin`) plus the bank properties. On modern iOS, NVRAM lives in NAND
 managed by **ANS**. So:
@@ -2129,14 +2129,14 @@ ans@             -> AppleASCWrapV6 -> iop-ans-nub -> RTBuddy(ANS2)  registered, 
 ```
 
 `AppleANS3CGv2Controller::start()` has its provider, its SART mapper and its
-register windows, and still fails before any hardware access — and
+register windows, and still fails before any hardware access - and
 `nvme-coastguard-disable=1` (a real boot-arg, confirmed working) does not change
 it. The failure is inside the driver, before MMIO, and finding it means
 disassembling that method inside `IONVMeFamily`.
 
 ---
 
-# Part 30: there is no legacy boot console — every visual path is DCP
+# Part 30: there is no legacy boot console - every visual path is DCP
 
 The last non-DCP hope was XNU's pexpert boot console, which on Apple Silicon
 renders verbose-boot text to `boot_args.Video` before any display driver loads.
@@ -2148,7 +2148,7 @@ vc_progress        initialize_screen     video_console/video_scroll
 PE_init_platform   gc_initialize         vinfo / v_baseAddr console code
 ```
 
-The only video presence in the kernel is `IOMobileFramebuffer*` — which is
+The only video presence in the kernel is `IOMobileFramebuffer*` - which is
 IOMFB, i.e. DCP-backed. `IOMobileFramebufferLegacy` exists but is still IOMFB,
 not a pexpert framebuffer console.
 
@@ -2184,7 +2184,7 @@ reverse-engineering project, not a session.
 
 ---
 
-# Part 31: both paths advanced — AFK transport implemented, unblock still deep
+# Part 31: both paths advanced - AFK transport implemented, unblock still deep
 
 ## Path 1 (done): the AFK transport handshake is implemented
 
@@ -2206,7 +2206,7 @@ Field layout (RBEP_TYPE, GETBUF_SIZE/TAG, GETBUF_ACK_DVA, INITRB_OFFSET/SIZE,
 BLOCK_SHIFT) is taken verbatim from the reference. It compiles, is boot-safe
 (iOS 27 still reaches a root shell with it enabled), and self-announces cleanly.
 
-This is real, reference-backed protocol code — the layer above the RTKit
+This is real, reference-backed protocol code - the layer above the RTKit
 handshake. It cannot be exercised yet, because nothing drives endpoint 0x24, but
 it is the correct next layer and the next person extends the IOMFB decode from
 its `RECV` foothold.
@@ -2223,14 +2223,14 @@ mailbox in the restore ramdisk:
 
 The remaining unblock options, all measured against this session's work:
 
-1. Drive an **active restore** (companion VM + idevicerestore over USB) — the
+1. Drive an **active restore** (companion VM + idevicerestore over USB) - the
    environment where storage/ANS is actually brought up. Inferno-style; a large
    setup, but it uses the device stack the restore ramdisk otherwise leaves
    idle.
-2. **Boot the real OS** — needs storage, which needs the ANS, which is what
+2. **Boot the real OS** - needs storage, which needs the ANS, which is what
    we're trying to bring up (circular here).
 3. **Multi-kext kernel patching** to make `RTBuddy(DCP)`/`AppleDCP` boot the DCP
-   IOP over the normal mailbox instead of the secure route — every crude
+   IOP over the normal mailbox instead of the secure route - every crude
    attempt panics (`AppleDCP` null-deref at obj+0x124), so it requires patching
    the driver's secure assumptions across kexts, tracked instruction by
    instruction.
@@ -2239,13 +2239,13 @@ The remaining unblock options, all measured against this session's work:
 
 The receiving half of the display path is now two layers deep and reference-
 backed: RTKit handshake (`apple_rtkit.c`) + AFK transport (`apple_dcp.c`). The
-transmitting half — an Apple driver driving endpoint 0x24 — remains gated on one
+transmitting half - an Apple driver driving endpoint 0x24 - remains gated on one
 of the three unblocks above, each a project rather than a patch. `run.sh` still
 boots to a root shell; everything is opt-in and preserved.
 
 ---
 
-# Part 32: a real, verified RTBuddy null-pointer fix — and the next wall behind it
+# Part 32: a real, verified RTBuddy null-pointer fix - and the next wall behind it
 
 ## The bug, traced from a live crash to its exact origin
 
@@ -2259,14 +2259,14 @@ esr: 0x0000000096000005 (translation fault)  far: 0x0000000000000124
 
 Subtracting the known kernel slide (`0x20000000`, from Part 4) gives the static
 PC `0xfffffff00a7cc260`, inside `com.apple.driver.RTBuddy`. Disassembly there is
-`ldr w8, [x0, #0x124]` with `x0 == NULL` — a state read on a null object.
+`ldr w8, [x0, #0x124]` with `x0 == NULL` - a state read on a null object.
 
 Walking the call chain backward (function entry `0xa7cc240`, its wrapper at
 `0xa7cc8ac`, called from `0xa7bb5a8`) landed on the real bug:
 
 ```asm
 0xa7bb5a4: ldr x0, [x19, #0x21a8]     ; this->secureRoute
-0xa7bb5a8: bl  0xa7cc8ac              ; UNCONDITIONAL — crashes when null
+0xa7bb5a8: bl  0xa7cc8ac              ; UNCONDITIONAL - crashes when null
 
 ; twenty bytes later, same function, same field:
 0xa7bb5c4: ldr x0, [x19, #0x21a8]     ; this->secureRoute, again
@@ -2275,40 +2275,40 @@ Walking the call chain backward (function entry `0xa7cc240`, its wrapper at
 
 The same nullable field is read twice in one function; one use is guarded, the
 other is not. This is an asymmetry in Apple's own code, not a design decision
-we're fighting — a real, fixable bug.
+we're fighting - a real, fixable bug.
 
 ## The fix
 
 `patch_rtbuddy_secureproxy.py` turns the unguarded `bl` into
 `cbz x0, <next-instruction>` (Keystone-assembled, verified to disassemble back
 to the intended branch and target before writing). It skips exactly one
-notification call when there is no secure route — it does not touch the
+notification call when there is no secure route - it does not touch the
 mailbox handshake, the DART/AIC/PMGR path, or any other RTBuddy logic. Anchored
 on the exact byte sequences at both the load and the call site, not a raw
 offset.
 
 **Verified safe**: with this patch alone (device tree unmodified except the
 already-necessary `mapper-dcp` un-mute from Part 22), iOS 27 boots to a root
-shell with zero panics — the crash this patch targets no longer occurs, under
+shell with zero panics - the crash this patch targets no longer occurs, under
 any device-tree configuration tested.
 
 ## What it does not fix
 
-`RTBuddy(DCP)::start()` still ends `!registered, busy 0` — it now fails
+`RTBuddy(DCP)::start()` still ends `!registered, busy 0` - it now fails
 *silently* (no log line, even with `debug=0x144 kextlog=0xffff`) instead of
 crashing. There is at least one more gate downstream that requires the actual
 secure-world service, and it fails cleanly rather than faulting.
 
 Removing the `routes` property entirely (rather than leaving it present-but-
 unresolvable) reaches further into `AppleDCP`'s initialization and hits a
-**second, more upstream crash** — a null-pointer store inside generic kernel
+**second, more upstream crash** - a null-pointer store inside generic kernel
 logging/tracing infrastructure (`com.apple.kernel` itself, not a kext),
 ```
 stur d0, [x8, #0xb1]     ; x8 = a global pointer, unpopulated at this point in boot
 ```
 This is likely a boot-ordering artifact of forcing DCP init earlier than this
 environment's kernel expects, rather than something specific to the secure
-route. It was not pursued further — it is a different, deeper problem than the
+route. It was not pursued further - it is a different, deeper problem than the
 one this session set out to fix, and conflating the two would risk masking real
 bugs behind speculative patches.
 
@@ -2318,7 +2318,7 @@ bugs behind speculative patches.
 string zeroing (unchanged since the start of this investigation) and the
 verified `patch_rtbuddy_secureproxy.py` guard. `firmware/bootkc.prepatch` is the
 clean baseline (silence_logs only) for resetting. `run.sh` reaches a root shell
-with the guard patch present — confirmed after this change.
+with the guard patch present - confirmed after this change.
 
 ## Where this leaves path 3
 
@@ -2330,7 +2330,7 @@ work: verified, incremental, and not close to finished.
 
 ---
 
-# Part 33: live kernel debugging works — and reveals the fix is necessary but not sufficient
+# Part 33: live kernel debugging works - and reveals the fix is necessary but not sufficient
 
 ## The debugger infrastructure, proven functional
 
@@ -2338,12 +2338,12 @@ darwin-vm's `-s -S` GDB stub plus `xcrun lldb` connecting via
 `connect://127.0.0.1:1234` **works**: breakpoints can be set at known runtime
 addresses (static VA + the 0x20000000 slide), auto-continue via
 `breakpoint command add`, and register state is readable at each stop. This is
-a real, reusable capability for whoever continues this investigation — no prior
+a real, reusable capability for whoever continues this investigation - no prior
 part of this document had a working live-debugging recipe; this one does.
 
 Practical notes for reuse: launch qemu with `-s -S` (frozen at reset), connect
 lldb with a batch script (`-b -s script.lldb`), and avoid `print "..."` inside
-`breakpoint command add` blocks — the expression evaluator has no running
+`breakpoint command add` blocks - the expression evaluator has no running
 language runtime this early and aborts the command list on error. Software
 breakpoints at kernel VAs may take a long time to be hit if inserted before the
 relevant page is live (translation isn't set up until well into boot); budget
@@ -2353,7 +2353,7 @@ several real-time minutes per session under emulation-with-debugger overhead.
 
 Breaking at the function containing the RTBuddy `"start(%p)"` log (entry
 `0xfffffff02a7bb524`, confirmed via the earlier static trace) and following
-execution to its return: **it hits `mov w0, #0x1` — the function returns
+execution to its return: **it hits `mov w0, #0x1` - the function returns
 true.** This is the function my Part 32 guard patch protects (the unconditional
 `bl` at `0xa7bb5a8` lives inside it).
 
@@ -2365,7 +2365,7 @@ instant.**
 
 ## What that means
 
-The function returning true does not, on its own, cause IOKit registration —
+The function returning true does not, on its own, cause IOKit registration - 
 either it is an internal helper rather than the actual polymorphic
 `IOService::start()` override, or `registerService()` is deferred behind
 further asynchronous conditions this session did not reach. A follow-up
@@ -2375,13 +2375,13 @@ the cost of an open-ended live-debugging session.
 
 ## Honest accounting of Part 32 + 33 together
 
-- One real, verified, safe RTBuddy bug is fixed (Part 32) — confirmed via
+- One real, verified, safe RTBuddy bug is fixed (Part 32) - confirmed via
   static analysis, live register inspection, and a clean root-shell boot under
   every device-tree configuration tried.
 - The debugging technique to go further (live kernel debugging via the GDB
   stub) is now demonstrated and documented for reuse.
-- The specific question this part set out to answer — why does `RTBuddy(DCP)`
-  never register even after the function that logs "start()" returns true —
+- The specific question this part set out to answer - why does `RTBuddy(DCP)`
+  never register even after the function that logs "start()" returns true - 
   is **open**, not closed. Simulating the full coprocessor handshake did not
   change the outcome, which rules out "it's just waiting for HELLO" as the
   explanation.
@@ -2391,13 +2391,13 @@ the cost of an open-ended live-debugging session.
 
 ---
 
-# Part 34: correcting a real design flaw in the Part 32 patch — a quality fix, not the unblock
+# Part 34: correcting a real design flaw in the Part 32 patch - a quality fix, not the unblock
 
 ## The flaw, found by logical analysis of the instructions
 
 Part 32's patch replaced the unconditional `bl` at `0xa7bb5a8` with
 `cbz x0, +4`. On reflection this has a bug: **when the branch is *not* taken
-(`x0` is non-null), execution simply falls through to the next instruction —
+(`x0` is non-null), execution simply falls through to the next instruction - 
 which is exactly where the branch target also lands.** So in *every* case, taken
 or not, the original call to `0xa7cc8ac` never executes. The patch was safe
 (no more crash) but silently dropped a legitimate notification whenever a real
@@ -2467,7 +2467,7 @@ it more rigorously than the flawed guard did.
 
 ---
 
-# Part 35: tracing into IOKit's registerService() — real progress, with an honest caveat
+# Part 35: tracing into IOKit's registerService() - real progress, with an honest caveat
 
 ## What was traced, and confirmed reachable via a live backtrace
 
@@ -2547,7 +2547,7 @@ answer.
 
 ---
 
-# Part 36: ROOT CAUSE — DCP's start() blocks in RTBuddy's route-resolution loop
+# Part 36: ROOT CAUSE - DCP's start() blocks in RTBuddy's route-resolution loop
 
 This part traces, entirely via live kernel debugging, the exact instruction and
 reason `RTBuddy(DCP)` never registers. It is the definitive answer the whole
@@ -2863,7 +2863,7 @@ transport) so the DCP's route can attach for real.
 
 ---
 
-# Part 40: cracking open the secure world — the exclavecore is extracted and mapped
+# Part 40: cracking open the secure world - the exclavecore is extracted and mapped
 
 The proven blocker is the secure world (ExclaveOS/SK domain). This part turns
 that from a black box into fully-characterized, extracted components, with the
@@ -3259,13 +3259,13 @@ opt-in behind `-cl4`.
 
 ---
 
-## Part 45 — BREAKTHROUGH: CL4 (exclave secure kernel) now EXECUTES
+## Part 45 - BREAKTHROUGH: CL4 (exclave secure kernel) now EXECUTES
 
 Full detail in RESUME-secure-world.md UPDATES 3 & 4. Summary:
 
 The old "CL4 stuck at PC=0x200" was a fault cascade, not a real vector. `-d int`
 revealed the true first fault: an FP/SIMD access trap (ESR EC 0x07) on CL4's first
-`ldr q0` — CPACR_EL1.FPEN was 0 because Apple GXF is supposed to hand the guarded
+`ldr q0` - CPACR_EL1.FPEN was 0 because Apple GXF is supposed to hand the guarded
 domain an FP-enabled context and this qemu-sptm fork did not. Three guarded-domain
 (env->currentg==1) fixes in QEMU make CL4 run:
 
@@ -3285,4 +3285,4 @@ partly built from x0/x1 SPTM passes at genter). That handoff is the current fron
 
 NOTE: these three edits are in the qemu-sptm working tree (uncommitted). They are
 keyed strictly on env->currentg so they only affect guarded (SPTM/TXM/SK) execution,
-not XNU — baseline XNU boot is unaffected.
+not XNU - baseline XNU boot is unaffected.

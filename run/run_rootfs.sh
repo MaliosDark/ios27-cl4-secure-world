@@ -21,7 +21,7 @@ if [[ -z "$ROOTFS" ]]; then
 fi
 [[ -n "$ROOTFS" && -f "$ROOTFS" ]] || { echo "no root filesystem image found; set ROOTFS=" >&2; exit 1; }
 
-MEM="${MEM:-20G}"   # dtree_ios declara dram-size=20GB (el rootfs no entra en 8GB)
+MEM="${MEM:-20G}"   # dtree_ios declares dram-size=20GB (the rootfs does not fit in 8GB)
 echo "rootfs : $ROOTFS ($(du -h "$ROOTFS" | cut -f1))"
 echo "memory : $MEM"
 

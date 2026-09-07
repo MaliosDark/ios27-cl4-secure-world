@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# gen_trampoline.py — assemble the CL4 __mod_init_func runner trampoline.
+# gen_trampoline.py - assemble the CL4 __mod_init_func runner trampoline.
 #
 # Emits a small position-independent ARM64 (AArch64) code blob that, when
 # executed in CL4's guarded EL1 context (MMU OFF, physical addressing), calls
@@ -13,7 +13,7 @@
 #   2. writing the four 8-byte pool words (ARRAY, ARRAY_END, STACKTOP, ENTRY)
 #      into the pool that immediately follows the code.
 #
-# Nothing here is hardcoded to a physical address — the loader supplies all
+# Nothing here is hardcoded to a physical address - the loader supplies all
 # addresses at boot from the values it already computes (rx_phys, entrypoint).
 #
 # Requires: keystone-engine (present in vphone-cli/.venv). Run:
@@ -28,8 +28,8 @@ import struct, sys
 #   x19..x28 and x29/x30, so x19..x24 SURVIVE across every `blr`. We keep all
 #   loop state in those callee-saved registers.
 #
-#   x19 = saved x0 (SPTM handoff pointer, tag2)  — restored before entry
-#   x20 = saved x1 (domain-descriptor pointer)   — restored before entry
+#   x19 = saved x0 (SPTM handoff pointer, tag2) - restored before entry
+#   x20 = saved x1 (domain-descriptor pointer) - restored before entry
 #   x21 = cursor into __mod_init_func (advances by 8)
 #   x22 = end of the __mod_init_func array (ARRAY + 11*8)
 #   x23 = scratch: current constructor physical pointer

@@ -1,4 +1,4 @@
-# CL4 constructor ordering — analysis and fix design
+# CL4 constructor ordering - analysis and fix design
 
 Authorized security research (user's own machine). Analysis only. No qemu build,
 no boot, no edits to the live `/Users/maliosdark/darwin-vm/qemu-sptm` tree.
@@ -10,16 +10,16 @@ Target: `firmware/exclave_comp/txtk` (CL4 secure kernel `__TEXT`).
 `__DATA` vmaddr `V` is at `phys = rx_phys + (V - 0xc0000000)` too.
 
 Scripts (run with `/Users/maliosdark/vphone-cli/.venv/bin/python`):
-- `disas.py <vmaddr> [n]`      — disassemble n insns, prints fo + phys.
-- `scan2.py {msr|mrs|svc|eret|hvc}` — word-by-word sysreg/exception scan.
-- `xref.py <vmaddr>`           — BL/B and ADRP+ADD xrefs to a target.
-- `reach.py <start> <t..>`     — bounded call-graph reachability (bl + tail-b).
-- `find_vectors.py`            — vector-table heuristic (result: none; see below).
+- `disas.py <vmaddr> [n]` - disassemble n insns, prints fo + phys.
+- `scan2.py {msr|mrs|svc|eret|hvc}` - word-by-word sysreg/exception scan.
+- `xref.py <vmaddr>` - BL/B and ADRP+ADD xrefs to a target.
+- `reach.py <start> <t..>` - bounded call-graph reachability (bl + tail-b).
+- `find_vectors.py` - vector-table heuristic (result: none; see below).
 
 --------------------------------------------------------------------------------
-## TL;DR — answer to the KEY QUESTION
+## TL;DR - answer to the KEY QUESTION
 
-**Yes, entry is the wrong place to run the ctors — but the deeper answer is that
+**Yes, entry is the wrong place to run the ctors - but the deeper answer is that
 a ctor-runner trampoline should not exist at all.** CL4 runs its own
 `__mod_init_func` pass, and it does so *after* its own `domain-setup` has
 installed the real per-thread environment. Two independent facts settle it:
@@ -29,17 +29,17 @@ installed the real per-thread environment. Two independent facts settle it:
    *base per-thread services*. CL4 then reaches its *own* `__mod_init_func`
    runner (`0xc015c3b4 → 0xc015c03c`, iterating `[0xc0698fc0, 0xc0699018)`), which
    runs the 11 ctors with that environment live. The current trampoline runs the
-   ctors at **entry**, before `domain-setup` — which is exactly why `domain-setup`
+   ctors at **entry**, before `domain-setup` - which is exactly why `domain-setup`
    "never executes (0 hits)" (RESUME UPDATE 16) and why every ctor prerequisite
    (`TPIDR_EL0`, `TPIDRRO_EL0`, the `(2,x)` registry) is missing. That is the
    whack-a-mole. The fake `TPIDR`/`TPIDRRO`/registry seeding in the loader is
    reconstructing, by hand and in the wrong order, what CL4 installs for itself a
    few calls later.
 
-2. **The `svc` is not a CL4 syscall — it is a call to the SPTM monitor (proven).**
+2. **The `svc` is not a CL4 syscall - it is a call to the SPTM monitor (proven).**
    CL4 `__TEXT` contains **zero** `msr vbar_el{1,2,3}`, **zero** `eret/eretaa/eretab`,
    and **zero** `mrs esr_el1 / far_el1 / elr_el1 / spsr_el1`. A kernel that
-   handled its own exceptions would need all three. CL4 has none — **CL4 has no
+   handled its own exceptions would need all three. CL4 has none - **CL4 has no
    exception vectors and no exception-handling code at all.** Its 440 `svc`
    instructions (immediates `#0..#5`) are **guarded-monitor calls to SPTM** (the
    guarded-EL2 monitor), the exclave equivalent of a hypercall. So "install
@@ -47,10 +47,10 @@ installed the real per-thread environment. Two independent facts settle it:
    install. The `svc` must be *delivered to SPTM*. In this qemu fork a
    guarded-EL1 `svc` vectors to `env->vbar_gl[1]` (`helper.c:9409`), which is
    **never written anywhere in the fork** (`cpu.h:829` declare + one read), so it
-   goes to `0` and cascades — the fault at `0xc009a9c0`.
+   goes to `0` and cascades - the fault at `0xc009a9c0`.
 
 Consequence: **fixing ordering removes the `TPIDR`/registry faults at their root,
-but is not sufficient by itself** — CL4's ctors emit log records via an SPTM call
+but is not sufficient by itself** - CL4's ctors emit log records via an SPTM call
 (`svc`), so the guarded-`svc`→SPTM path must also be made to work (or be
 emulated). Both are needed; they are independent.
 
@@ -77,14 +77,14 @@ Cold boot arrives with `SP == 0` (`cmp sp,#0 ; b.ne` at `0xc00994f8`), taking th
 ### domain-setup `0xc00a6ea4` installs the environment
 
 Disassembly of `0xc00a6ea4`:
-- `0xc00a6edc  mrs x8, tpidr_el0 ; cbz x8, 0xc00a700c` — first-run path when
+- `0xc00a6edc  mrs x8, tpidr_el0 ; cbz x8, 0xc00a700c` - first-run path when
   `TPIDR_EL0 == 0`. That path allocates a per-thread context (`x24`), fills it,
   and at:
-- **`0xc00a7114  bl 0xc00aa724`** — calls the TPIDR setter
+- **`0xc00a7114  bl 0xc00aa724`** - calls the TPIDR setter
   `set_tpidr_el0(x0){ msr tpidr_el0, x0 ; ret }` (`0xc00aa724`, phys
   `0x1000692e724`; the **only** `msr tpidr_el0` in the whole image), i.e. installs
   the **real** `TPIDR_EL0`. Loops back to re-check (now non-zero).
-- **`0xc00a7178  bl 0xc00982e0`** — calls the **base per-thread registrar**
+- **`0xc00a7178  bl 0xc00982e0`** - calls the **base per-thread registrar**
   `0xc00982e0` with `x0 = [x23+0x10]` (`x23` = boot-info array). This populates
   the base `(key1,key2)` per-thread services that the `(2,x)` lazy factories read.
 
@@ -96,7 +96,7 @@ registry is live.
 `TPIDRRO_EL0` is the read-only per-thread word CL4's own code reads (e.g. the log
 path `0xc009a890` does `mrs x23, tpidrro_el0 ; ldrb w8,[x23,#9]`). It is set by
 the same guarded bring-up (hardware/SPTM provides it at genter); CL4 never writes
-it via a caught instruction — consistent with it being monitor-provided.
+it via a caught instruction - consistent with it being monitor-provided.
 
 --------------------------------------------------------------------------------
 ## 2. The ctors are CL4's own, and run after domain-setup
@@ -105,16 +105,16 @@ it via a caught instruction — consistent with it being monitor-provided.
 pointers, `S_MOD_INIT_FUNC_POINTERS`). Contrary to RESUME UPDATE 11, **CL4 does
 contain a runner for it.**
 
-- **Iterator** `0xc015c298` — calls each pointer in a `[start,end)` init array.
-- **Runner** `0xc015c03c` — takes a flag in `w0`; when set, runs the init arrays:
+- **Iterator** `0xc015c298` - calls each pointer in a `[start,end)` init array.
+- **Runner** `0xc015c03c` - takes a flag in `w0`; when set, runs the init arrays:
   `__DATA_CONST,__mod_init_func` (empty), then **`__mod_init_func`
   `[0xc0698fc0, 0xc0699018)`** (the 11 ctors), then `0xc0669b30`-region arrays.
   (`0xc015c084`/`0xc015c08c` materialize exactly `0xc0698fc0`/`0xc0699018`.)
-- **Wrapper** `0xc015c3b4` — `w0=1 ; bl 0xc00982b0 ; ... ; b 0xc015c03c` (the C++
+- **Wrapper** `0xc015c3b4` - `w0=1 ; bl 0xc00982b0 ; ... ; b 0xc015c03c` (the C++
   "run static constructors" entry).
 - **Called from** `0xc0097fb4` (`bl 0xc015c3b4`) inside function **`0xc0097e3c`**,
   which is guarded by a "ctors-done" byte at `0xc06fecd8` (`tbnz` at entry;
-  `strb #1` at `0xc0097fc4`) — i.e. CL4's own idempotent init step, not an
+  `strb #1` at `0xc0097fc4`) - i.e. CL4's own idempotent init step, not an
   external loader.
 
 Placement in the boot flow (`reach.py`): from `0xc0098004` (main init, called
@@ -131,7 +131,7 @@ consumers**. The `(2,5)` consumer is a lazy getter:
     x0 = 0xc06fece0 ; w1=2 ; w2=5 ; bl 0xc00a0e58 (factory) ; x0=[x0+0x2a0] ; ret
 ```
 
-It faults only when the `(2,5)` registry is still empty — i.e. only when the ctor
+It faults only when the `(2,5)` registry is still empty - i.e. only when the ctor
 pass has not run (our entry-time trampoline) or has not completed (the `svc`
 fault). In correct order it is seeded first.
 
@@ -155,19 +155,19 @@ The faulting `svc` is `0xc009a9bc  svc #0` (the RESUME's `0xc009a9c0` is the
 `svc #0` with `x0 = channel`, `x1 = 0`, returning a status in `x0`. This is a
 **guarded-monitor call to SPTM** to emit a secure log record. The immediate
 distribution across all 440 `svc` (`scan`): `#0`×304, `#1`×25, `#2`×12, `#3`×44,
-`#4`×44, `#5`×8 — the immediate selects the SPTM **call class**; the operation
-within a class is register-selected (`x0`). (Also 10 `hvc`, 3 `smc` — EL2/EL3
+`#4`×44, `#5`×8 - the immediate selects the SPTM **call class**; the operation
+within a class is register-selected (`x0`). (Also 10 `hvc`, 3 `smc` - EL2/EL3
 monitor calls.)
 
 Because CL4 has **no** vectors, no `eret`, and no `esr/elr/spsr` access, none of
 these can be serviced *by CL4*. They are serviced by **SPTM**, which is loaded and
 running as the guarded monitor. "Running the ctors after VBAR install" cannot help
-— there is no CL4 VBAR. What is missing is the guarded-EL1→SPTM delivery.
+ - there is no CL4 VBAR. What is missing is the guarded-EL1→SPTM delivery.
 
 --------------------------------------------------------------------------------
 ## 4. Fix design
 
-### 4.1 Ordering fix (root cause) — recommended, path (a)
+### 4.1 Ordering fix (root cause) - recommended, path (a)
 
 Stop forcing the ctors at CL4 entry. Let CL4 run its own early-init so the
 environment is built by CL4 in the right order, then the ctors run through CL4's
@@ -177,12 +177,12 @@ Concretely, in `target/arm/tcg/helper-a64.c` `HELPER(exception_return)`:
 
 - **Remove** the entry-time ctor-runner divert (the
   `g_cl4_tramp_pc && !g_cl4_ctors_done && new_pc == g_cl4_entry_pc` block,
-  lines ~782–795), and **remove** the fake `TPIDR`/`TPIDRRO` writes it does
+  lines ~782-795), and **remove** the fake `TPIDR`/`TPIDRRO` writes it does
   (`env->cp15.tpidr_el[0] = g_cl4_tpidr`, `...tpidrro_el[0] = g_cl4_tpidrro`).
   Those invert the order and mask CL4's real environment.
 - In `hw/arm/xnuboot_sptm.c`, stop building the trampoline + fake per-thread
   context + pre-seeded `(2,5)` node (the whole `if (!getenv("CL4_NO_CTORS"))`
-  block, ~lines 476–534). Keep the CL4 scratch page only if still used for the
+  block, ~lines 476-534). Keep the CL4 scratch page only if still used for the
   x1 probe.
 - Keep the x1 injection (`g_cl4_x1_inject` at the entry ERET) **only** if the
   handoff still delivers `x1 == 0` / tag3-null; drop it once the handoff carries a
@@ -198,16 +198,16 @@ phase), gate it on the **environment-ready PC, not entry**, and use CL4's *real*
 `TPIDR`:
 
 - Gate PC = `0x1000691d738` (`vmaddr 0xc0099738`, domain-setup return, cold path)
-  — or `0x1000691d6c0` (`0xc00996c0`) on the secondary path.
+ - or `0x1000691d6c0` (`0xc00996c0`) on the secondary path.
 - At the gate, `env->cp15.tpidr_el[0]` already holds CL4's real per-thread context
-  (domain-setup set it) — **do not overwrite it**. Save `x0..x30/SP/PC`, point PC
+  (domain-setup set it) - **do not overwrite it**. Save `x0..x30/SP/PC`, point PC
   at a trampoline that calls the runner (or better, call CL4's own wrapper
   `0xc015c3b4` at phys `0x100069e03b4` with `w0=1`), then restore and resume at the
   gate PC. No fake registry seeding is needed because the base registry is live.
 - Because the gate PC is a normal instruction (reached by `blr` return, not an
   ERET), it cannot be caught in `HELPER(exception_return)`. Add a cheap one-shot
   PC check in the guarded-execution translate/exec path, or hook the **real**
-  `msr tpidr_el0` write (`0xc00aa724`) — the CP write helper for `TPIDR_EL0` —
+  `msr tpidr_el0` write (`0xc00aa724`) - the CP write helper for `TPIDR_EL0` - 
   as the "environment coming up" signal (domain-setup's registrar runs a few
   instructions later, so resume-and-recheck, or defer the divert to the first
   guarded instruction fetch at/after `0xc0099738`).
@@ -222,7 +222,7 @@ In this fork a guarded-EL1 synchronous exception is delivered to
 `env->vbar_gl[new_el=1]`, which is never populated. On real hardware GXF delivers
 guarded-EL1 exceptions/monitor-calls to the guarded monitor (SPTM). Two options:
 
-- **(A) Faithful — route guarded-EL1 synchronous exceptions to SPTM.** Make an
+- **(A) Faithful - route guarded-EL1 synchronous exceptions to SPTM.** Make an
   `svc` (and the FP/alignment sync exceptions the fork currently *suppresses* for
   guarded state, `fp_exception_el`/`ptw`/`hflags`) escalate to SPTM's monitor
   entry instead of staying at EL1 with `vbar_gl[1]=0`. SPTM already runs as the
@@ -231,17 +231,17 @@ guarded-EL1 exceptions/monitor-calls to the guarded monitor (SPTM). Two options:
   (transition to GL2, `addr = gxf_entry_el[2]`, bank `spsr_gl/elr_gl/esr_gl`), so
   the real SPTM `svc`/exception handler services the call and returns to GL1. This
   is the correct long-term fix and needs no knowledge of the SPTM call ABI.
-  - Minimum viable version: at least make the write path to `vbar_gl[]` exist and
+ - Minimum viable version: at least make the write path to `vbar_gl[]` exist and
     honor it (today it is write-dead), and add the GL1→GL2 sync-exception path.
 
-- **(B) Research shortcut — trap-and-emulate the log `svc` in qemu.** For
+- **(B) Research shortcut - trap-and-emulate the log `svc` in qemu.** For
   `svc #imm` taken in guarded state (`env->currentg`) with `vbar_gl[1]==0`, decode
   the class (immediate) and, for the log/trace call (`#0`, `x1==0`), consume the
   record buffer (optionally print it to `-d int`), set `x0` = success status
   (`!= 1` so the retry loop at `0xc009a9c0` exits), and return to `ELR` (the insn
   after the `svc`). This unblocks the ctor pass without SPTM, but `svc #0` is the
   general SPTM-call gate (register-selected), so other classes will need their own
-  emulation — brittle; use only to see the next stage, prefer (A).
+  emulation - brittle; use only to see the next stage, prefer (A).
 
 ### 4.3 Note on the qemu gap
 
@@ -255,7 +255,7 @@ is chosen, this is the concrete missing mechanism.
 
 1. Apply 4.1 (remove entry trampoline + fake TPIDR/registry). Boot with
    `-d int -D /tmp/int.log`. Expect CL4 to now execute `domain-setup`
-   (`0x1000692aea4`) — confirm with a `-dfilter 0x1000692aea4..0x1000692aeb0`
+   (`0x1000692aea4`) - confirm with a `-dfilter 0x1000692aea4..0x1000692aeb0`
    exec trace showing ≥1 hit (previously 0). Confirm the real `msr tpidr_el0` at
    `0x1000692e724` executes (guarded TPIDR write).
 2. The first fault should now be the guarded `svc` at `0x1000691e9bc` (log call),
@@ -271,7 +271,7 @@ is chosen, this is the concrete missing mechanism.
    to `0x100069e03b4` (`w0=1`) gated at `0x1000691d738` with the real TPIDR.
 
 --------------------------------------------------------------------------------
-## Appendix — address table (vmaddr / file-offset / phys, rx=0x10006884000)
+## Appendix - address table (vmaddr / file-offset / phys, rx=0x10006884000)
 
 | symbol / role                         | vmaddr       | fo        | phys           |
 |---------------------------------------|--------------|-----------|----------------|

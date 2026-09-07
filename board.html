@@ -1,4 +1,4 @@
-<title>Placa del Mundo Seguro</title>
+<title>Secure World Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
@@ -107,31 +107,31 @@
 <div class="wrap">
   <header>
     <div class="eyebrow">iOS 27 · iPhone17,3 · t8140 · darwin-vm / qemu-sptm</div>
-    <h1>La placa del mundo seguro</h1>
-    <p class="sub">El aparato que estamos construyendo para encender la pantalla de iOS 27, pieza por pieza. Cada chip es un componente del arranque; cada traza, una conexión real. Verde funciona, ámbar arranca a medias, rojo bloqueado, gris todavía no existe. Tocá un chip para ver qué hace, qué logramos y qué falta.</p>
+    <h1>The secure world board</h1>
+    <p class="sub">The device we are building to light up the iOS 27 screen, piece by piece. Each chip is a boot component; each trace, a real connection. Green works, amber half-boots, red blocked, gray does not exist yet. Tap a chip to see what it does, what we achieved, and what is missing.</p>
     <div class="tally" id="tally"></div>
   </header>
 
   <div class="toolbar">
-    <div class="paths" role="group" aria-label="Rutas a la pantalla">
-      <button data-path="all" aria-pressed="true">Ver todo</button>
-      <button data-path="secure" aria-pressed="false">Ruta segura (CL4)</button>
-      <button data-path="bypass" aria-pressed="false">Ruta bypass (DCP)</button>
+    <div class="paths" role="group" aria-label="Paths to the screen">
+      <button data-path="all" aria-pressed="true">Show all</button>
+      <button data-path="secure" aria-pressed="false">Secure path (CL4)</button>
+      <button data-path="bypass" aria-pressed="false">Bypass path (DCP)</button>
     </div>
     <div class="legend">
-      <span><i class="dot c-ok"></i>funciona</span>
-      <span><i class="dot c-partial"></i>parcial</span>
-      <span><i class="dot c-blocked"></i>bloqueado</span>
-      <span><i class="dot c-missing"></i>falta</span>
-      <span><i class="dot c-phos"></i>la pantalla</span>
-      <span><i class="swatch"></i>traza viva</span>
-      <span><i class="swatch dash"></i>traza por construir</span>
+      <span><i class="dot c-ok"></i>works</span>
+      <span><i class="dot c-partial"></i>partial</span>
+      <span><i class="dot c-blocked"></i>blocked</span>
+      <span><i class="dot c-missing"></i>missing</span>
+      <span><i class="dot c-phos"></i>the screen</span>
+      <span><i class="swatch"></i>live trace</span>
+      <span><i class="swatch dash"></i>trace to build</span>
     </div>
   </div>
 
   <div class="stage">
     <div class="boardbox">
-      <svg class="board" viewBox="0 0 1280 700" role="img" aria-label="Diagrama tipo placa madre del arranque seguro de iOS 27">
+      <svg class="board" viewBox="0 0 1280 700" role="img" aria-label="Motherboard-style diagram of the iOS 27 secure boot">
         <defs>
           <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
             <feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
@@ -145,8 +145,8 @@
         </defs>
         <rect x="0" y="0" width="1280" height="700" fill="url(#grid)"/>
         <!-- lane labels -->
-        <text x="24" y="70" class="silk-sub" font-size="11" letter-spacing="3" fill="#3f5a4f">MUNDO SEGURO · EL1 guarded</text>
-        <text x="24" y="392" class="silk-sub" font-size="11" letter-spacing="3" fill="#3f5a4f">MUNDO NORMAL · XNU · EL1</text>
+        <text x="24" y="70" class="silk-sub" font-size="11" letter-spacing="3" fill="#3f5a4f">SECURE WORLD · EL1 guarded</text>
+        <text x="24" y="392" class="silk-sub" font-size="11" letter-spacing="3" fill="#3f5a4f">NORMAL WORLD · XNU · EL1</text>
         <g id="traces"></g>
         <g id="chips"></g>
       </svg>
@@ -157,99 +157,99 @@
 
   <div class="rows">
     <div class="block">
-      <h3>El camino recorrido</h3>
+      <h3>The road so far</h3>
       <div id="miles"></div>
     </div>
     <div class="block">
-      <h3>La frontera — lo que falta para los píxeles</h3>
+      <h3>The frontier - what is missing for the pixels</h3>
       <div class="front">
-        <span class="tag c-ok">Panel encendido ✓ · falta la UI gráfica</span>
-        <h4>Superficies reales del guest (IOMFB)</h4>
-        <p>El panel YA enciende y muestra el boot log real de iOS (scanout completo). Para la UI gráfica falta que el guest entregue superficies vía <code>IOMFB/EPIC</code> — y correr el OS completo, no el ramdisk. Es el último tramo.</p>
+        <span class="tag c-ok">Panel on ✓ · graphical UI missing</span>
+        <h4>Real guest surfaces (IOMFB)</h4>
+        <p>The panel ALREADY lights up and shows the real iOS boot log (full scanout). For the graphical UI, the guest still needs to deliver surfaces via <code>IOMFB/EPIC</code> - and run the full OS, not the ramdisk. It is the last stretch.</p>
       </div>
       <div class="front">
-        <span class="tag c-blocked">Ruta segura (CL4)</span>
-        <h4>Handoff SPTM→SK + rutear los <code>svc</code> al monitor</h4>
-        <p>CL4 ejecuta pero su domain-setup necesita el handoff correcto y que sus llamadas <code>svc</code> lleguen a SPTM. Y aun booteando entero, necesita <code>ExclaveOS</code> (164 MB) para registrar el servicio de display.</p>
+        <span class="tag c-blocked">Secure path (CL4)</span>
+        <h4>Handoff SPTM→SK + route the <code>svc</code> to the monitor</h4>
+        <p>CL4 executes but its domain-setup needs the correct handoff and its <code>svc</code> calls to reach SPTM. And even booting fully, it needs <code>ExclaveOS</code> (164 MB) to register the display service.</p>
       </div>
     </div>
   </div>
 
   <footer>
-    Estado a esta sesión · repo <b style="color:var(--silk)">ios27-cl4-secure-world</b> (15 commits) · 3 fixes de CPU guarded + mailbox DCP activo + CL4 ejecutando.<br>
-    No es firmware ni llaves — solo el mapa del aparato. La mitad del pipeline (framebuffer → consola) está lista; falta la mitad del DCP.
+    Status as of this session · repo <b style="color:var(--silk)">ios27-cl4-secure-world</b> (15 commits) · 3 guarded CPU fixes + active DCP mailbox + CL4 executing.<br>
+    It is not firmware or keys - just the map of the device. Half the pipeline (framebuffer → console) is ready; half the DCP is missing.
   </footer>
 </div>
 
 <script>
 const C = {
   sptm:{name:"SPTM",sub:"secure page table monitor",st:"ok",x:44,y:300,w:150,h:96,
-    role:"El monitor que arranca y gobierna los 3 dominios (XNU, TXM, SK). Corre en EL2 guarded.",
-    blurb:"El binario real de Apple corre y bootstrapea todo. Es la raíz de la placa.",
-    done:["Bootea SPTM/TXM/XNU","Hace genter al dominio SK (CL4)","Valida el orden de regiones"],
-    todo:["Entregar el handoff SK completo a CL4 (hoy pasa x1=0)","Rutear las llamadas svc de CL4 al monitor"]},
+    role:"The monitor that boots and governs the 3 domains (XNU, TXM, SK). Runs in EL2 guarded.",
+    blurb:"Apple's real binary runs and bootstraps everything. It is the root of the board.",
+    done:["Boots SPTM/TXM/XNU","genters the SK domain (CL4)","Validates the region order"],
+    todo:["Deliver the full SK handoff to CL4 (today it passes x1=0)","Route CL4 svc calls to the monitor"]},
   txm:{name:"TXM",sub:"trusted execution monitor",st:"ok",x:44,y:126,w:120,h:52,
-    role:"Monitor de ejecución confiable. Dominio guarded que valida code signing.",
-    blurb:"Bootea limpio junto a SPTM.",done:["Bootstrap completo"],todo:[]},
-  iboot:{name:"BOOT",sub:"cadena de arranque",st:"ok",x:44,y:470,w:120,h:50,
-    role:"La cadena que carga bootkc/sptm/txm/dtree/ramdisk en memoria.",
-    blurb:"El loader de darwin-vm coloca todo en RAM y salta a SPTM.",done:["Carga e inicia el sistema"],todo:[]},
+    role:"Trusted execution monitor. Guarded domain that validates code signing.",
+    blurb:"Boots cleanly alongside SPTM.",done:["Full bootstrap"],todo:[]},
+  iboot:{name:"BOOT",sub:"boot chain",st:"ok",x:44,y:470,w:120,h:50,
+    role:"The chain that loads bootkc/sptm/txm/dtree/ramdisk into memory.",
+    blurb:"The darwin-vm loader places everything in RAM and jumps to SPTM.",done:["Loads and starts the system"],todo:[]},
 
   cl4:{name:"CL4",sub:"secure kernel · exclaves",st:"partial",x:270,y:120,w:176,h:110,
-    role:"El microkernel seguro (SK / cL4). Publica los endpoints seguros como SecureRTBuddyDCP.",
-    blurb:"Pasó de NO ejecutar a ejecutar y correr por su init. El gran salto de estas sesiones.",
-    done:["Ejecuta (3 fixes de CPU guarded: FP, memoria Normal MMU-off, alineación)","__DATA contiguo → el domain-lookup pasa","Corre por su early-init y sus constructores"],
-    todo:["domain-setup necesita el handoff SPTM→SK válido","Sus svc deben rutearse al monitor SPTM","Instala su TPIDR y registra servicios base — hoy se queda en null"]},
-  domreg:{name:"DOMAIN-SETUP",sub:"registro de dominios",st:"blocked",x:524,y:132,w:158,h:80,
-    role:"El paso que construye el contexto per-thread, instala TPIDR y registra los servicios base.",
-    blurb:"Se bloquea leyendo un objeto vacío — su entrada (el handoff) no está poblada.",
-    done:["Ubicada la función (0xc00a6ea4) y el registrador (0xc00982e0)"],
-    todo:["Necesita datos reales del handoff SK","Depende de que los svc lleguen a SPTM"]},
-  exos:{name:"ExclaveOS",sub:"userspace seguro · 164 MB",st:"missing",x:748,y:118,w:168,h:106,
-    role:"El segundo OS del mundo seguro: dyld, Tightbeam IPC y frameworks seguros. Quien REALMENTE registra SecureRTBuddyDCP.",
-    blurb:"No booteado. Es un sistema operativo completo aparte — el requisito oculto de la ruta segura.",
-    done:["Identificado y extraído el bundle (parser DNUB)"],
-    todo:["Bootear CL4 primero","Levantar dyld + Tightbeam seguros","Registrar el servicio de display"]},
-  srb:{name:"SecureRTBuddyDCP",sub:"ruta segura del DCP",st:"missing",x:966,y:138,w:190,h:74,
-    role:"El servicio/ruta segura que XNU espera para hablar con el DCP. Lo publica ExclaveOS.",
-    blurb:"No existe porque ExclaveOS no corre. Es la puerta que la ruta segura debe abrir.",
-    done:["Mapeado cómo XNU lo busca (waitForMatchingService)"],
-    todo:["Requiere ExclaveOS + handshake Tightbeam"]},
+    role:"The secure microkernel (SK / cL4). Publishes the secure endpoints like SecureRTBuddyDCP.",
+    blurb:"Went from NOT executing to executing and running through its init. The big leap of these sessions.",
+    done:["Executes (3 guarded CPU fixes: FP, Normal MMU-off memory, alignment)","__DATA contiguous → the domain-lookup passes","Runs through its early-init and its constructors"],
+    todo:["domain-setup needs the valid SPTM→SK handoff","Its svc must be routed to the SPTM monitor","Installs its TPIDR and registers base services - today it stays null"]},
+  domreg:{name:"DOMAIN-SETUP",sub:"domain registry",st:"blocked",x:524,y:132,w:158,h:80,
+    role:"The step that builds the per-thread context, installs TPIDR and registers the base services.",
+    blurb:"Blocks reading an empty object - its input (the handoff) is not populated.",
+    done:["Located the function (0xc00a6ea4) and the registrar (0xc00982e0)"],
+    todo:["Needs real data from the SK handoff","Depends on the svc reaching SPTM"]},
+  exos:{name:"ExclaveOS",sub:"secure userspace · 164 MB",st:"missing",x:748,y:118,w:168,h:106,
+    role:"The second OS of the secure world: dyld, Tightbeam IPC and secure frameworks. The one that REALLY registers SecureRTBuddyDCP.",
+    blurb:"Not booted. It is a full separate operating system - the hidden requirement of the secure path.",
+    done:["Identified and extracted the bundle (DNUB parser)"],
+    todo:["Boot CL4 first","Bring up secure dyld + Tightbeam","Register the display service"]},
+  srb:{name:"SecureRTBuddyDCP",sub:"DCP secure path",st:"missing",x:966,y:138,w:190,h:74,
+    role:"The secure service/path that XNU waits for to talk to the DCP. ExclaveOS publishes it.",
+    blurb:"It does not exist because ExclaveOS is not running. It is the door the secure path must open.",
+    done:["Mapped how XNU looks for it (waitForMatchingService)"],
+    todo:["Requires ExclaveOS + Tightbeam handshake"]},
 
-  xnu:{name:"XNU",sub:"kernel · mundo normal",st:"ok",x:270,y:432,w:176,h:100,
-    role:"El kernel que corremos por CLI. Bootea a userspace (ramdisk).",
-    blurb:"Arranca hasta launchd/dyld. El mundo normal funciona.",
-    done:["Bootea a userspace headless","Carga los drivers de display"],
-    todo:["Su driver de DCP queda esperando la ruta segura"]},
-  rtbuddy:{name:"RTBuddy · DCP",sub:"driver coprocesador",st:"partial",x:524,y:428,w:156,h:72,
-    role:"El driver RTKit del DCP en XNU. En stock espera para siempre la ruta SecureRTBuddyDCP.",
-    blurb:"Con dtree_nr2 dejó de esperar la ruta segura y arranca contra el mailbox emulado.",
-    done:["Ya no cuelga en waitForMatchingService","Redirigido al mailbox ASC normal (dtree_nr2)"],
-    todo:["Depende de que AppleDCP complete su init"]},
-  appledcp:{name:"AppleDCP",sub:"driver de display",st:"partial",x:524,y:516,w:156,h:58,
-    role:"El driver que maneja el coprocesador de display y habla IOMFB.",
-    blurb:"Pasó de esperar a EJECUTAR su init contra el mailbox emulado.",
-    done:["Corre su init (parche al dispatch de callbacks)"],
-    todo:["Cadena de null-derefs: su estado no se inicializa sin el servicio DCP","Necesita IOMFB para publicar el framebuffer"]},
-  mbox:{name:"apple_dcp",sub:"mailbox emulado · QEMU",st:"partial",x:742,y:424,w:168,h:92,
-    role:"Nuestra emulación del coprocesador DCP en QEMU: mailbox ASC + RTKit + AFK.",
-    blurb:"ACTIVADO con DARWIN_RTKIT=1 — antes estaba dormido. El mailbox ya responde.",
-    done:["Mailbox ASC 0x412e00000 vivo","RTKit ep0 (HELLO/EPMAP) + AFK rings 0x23/0x24/0x25","Geometría 640×1136, fb real conectado"],
-    todo:["Mapear los rings AFK en memoria (bfr_dva)","Implementar el RPC IOMFB/EPIC (mode-set/superficie/swap)"]},
+  xnu:{name:"XNU",sub:"kernel · normal world",st:"ok",x:270,y:432,w:176,h:100,
+    role:"The kernel we run via CLI. Boots to userspace (ramdisk).",
+    blurb:"Boots up to launchd/dyld. The normal world works.",
+    done:["Boots to userspace headless","Loads the display drivers"],
+    todo:["Its DCP driver stays waiting for the secure path"]},
+  rtbuddy:{name:"RTBuddy · DCP",sub:"coprocessor driver",st:"partial",x:524,y:428,w:156,h:72,
+    role:"The DCP's RTKit driver in XNU. Stock, it waits forever for the SecureRTBuddyDCP path.",
+    blurb:"With dtree_nr2 it stopped waiting for the secure path and boots against the emulated mailbox.",
+    done:["No longer hangs in waitForMatchingService","Redirected to the normal ASC mailbox (dtree_nr2)"],
+    todo:["Depends on AppleDCP completing its init"]},
+  appledcp:{name:"AppleDCP",sub:"display driver",st:"partial",x:524,y:516,w:156,h:58,
+    role:"The driver that manages the display coprocessor and speaks IOMFB.",
+    blurb:"Went from waiting to EXECUTING its init against the emulated mailbox.",
+    done:["Runs its init (patch to the callback dispatch)"],
+    todo:["Chain of null-derefs: its state does not initialize without the DCP service","Needs IOMFB to publish the framebuffer"]},
+  mbox:{name:"apple_dcp",sub:"emulated mailbox · QEMU",st:"partial",x:742,y:424,w:168,h:92,
+    role:"Our emulation of the DCP coprocessor in QEMU: mailbox ASC + RTKit + AFK.",
+    blurb:"ENABLED with DARWIN_RTKIT=1 - before it was asleep. The mailbox now responds.",
+    done:["Mailbox ASC 0x412e00000 alive","RTKit ep0 (HELLO/EPMAP) + AFK rings 0x23/0x24/0x25","640×1136 geometry, real fb connected"],
+    todo:["Map the AFK rings in memory (bfr_dva)","Implement the IOMFB/EPIC RPC (mode-set/surface/swap)"]},
   iomfb:{name:"IOMFB",sub:"IOMobileFramebuffer",st:"missing",x:742,y:540,w:168,h:56,
-    role:"La capa que recibe superficies del driver y las manda al DCP para mostrarlas.",
-    blurb:"No construida. Es el costo dominante — el protocolo real del display.",
-    done:[],todo:["Construir el RPC EPIC completo","Registro de superficies + swaps"]},
-  dfb:{name:"DarwinFB",sub:"consola de QEMU",st:"ok",x:958,y:300,w:140,h:86,
-    role:"El framebuffer de salida: una consola gráfica de QEMU sobre RAM real.",
-    blurb:"LISTA y esperando píxeles. Cuando el DCP entregue una superficie, acá se ve.",
-    done:["fb 640×1136 asignado (DARWIN_FB=1)","boot_args.Video + /vram publicados","Consola gráfica creada"],
-    todo:["Recibir el scanout desde apple_dcp"]},
-  screen:{name:"PANTALLA",sub:"el objetivo",st:"phos",x:1140,y:150,w:112,h:396,
-    role:"La pantalla del iPhone. El objetivo de todo el aparato.",
-    blurb:"ENCENDIDA. Nuestro DCP maneja el panel y muestra el boot log REAL de iOS 27 (640×1136).",
-    done:["Panel manejado por el DCP emulado","Scanout DCP→framebuffer→consola completo","Log real de iOS renderizado en el panel"],
-    todo:["Para la UI gráfica de iOS: superficies IOMFB del OS completo (no ramdisk)"]}
+    role:"The layer that receives surfaces from the driver and sends them to the DCP to display them.",
+    blurb:"Not built. It is the dominant cost - the real display protocol.",
+    done:[],todo:["Build the full EPIC RPC","Surface registration + swaps"]},
+  dfb:{name:"DarwinFB",sub:"QEMU console",st:"ok",x:958,y:300,w:140,h:86,
+    role:"The output framebuffer: a QEMU graphical console over real RAM.",
+    blurb:"READY and waiting for pixels. When the DCP delivers a surface, it shows here.",
+    done:["fb 640×1136 allocated (DARWIN_FB=1)","boot_args.Video + /vram published","Graphical console created"],
+    todo:["Receive the scanout from apple_dcp"]},
+  screen:{name:"SCREEN",sub:"the goal",st:"phos",x:1140,y:150,w:112,h:396,
+    role:"The iPhone screen. The goal of the whole device.",
+    blurb:"ON. Our DCP drives the panel and shows the REAL iOS 27 boot log (640×1136).",
+    done:["Panel driven by the emulated DCP","Full DCP→framebuffer→console scanout","Real iOS log rendered on the panel"],
+    todo:["For the graphical iOS UI: IOMFB surfaces from the full OS (not ramdisk)"]}
 };
 
 const T = [
@@ -260,25 +260,25 @@ const T = [
   ["cl4","r","domreg","l","blocked"],
   ["domreg","r","exos","l","missing"],
   ["exos","r","srb","l","missing"],
-  ["srb","b","rtbuddy","t","blocked","la ruta que XNU espera"],
+  ["srb","b","rtbuddy","t","blocked","the path XNU waits for"],
   ["xnu","r","rtbuddy","l","ok"],
   ["rtbuddy","b","appledcp","t","partial"],
   ["rtbuddy","r","mbox","l","partial","DARWIN_RTKIT"],
   ["appledcp","r","mbox","l","partial"],
   ["mbox","b","iomfb","t","missing"],
-  ["mbox","r","dfb","l","ok","scanout vivo"],
+  ["mbox","r","dfb","l","ok","live scanout"],
   ["iomfb","r","dfb","l","missing"],
   ["dfb","r","screen","l","ok"]
 ];
 
 const MILES = [
-  ["01","3 fixes de CPU guarded","CL4 pasa de no ejecutar a ejecutar (FP, memoria, alineación)"],
-  ["02","__DATA contiguo","El domain-lookup de CL4 deja de leer basura"],
-  ["03","ctor-runner","Los 11 constructores de CL4 corren"],
-  ["04","DARWIN_RTKIT=1","El mailbox DCP emulado se enciende — antes dormido"],
-  ["05","dtree_nr2","RTBuddy(DCP) suelta la ruta segura y usa el mailbox"],
-  ["06","AppleDCP arranca","El driver de display ejecuta su init contra el mailbox"],
-  ["07","PANTALLA ENCENDIDA","Nuestro DCP pinta el boot log real de iOS en el panel — scanout completo"]
+  ["01","3 guarded CPU fixes","CL4 goes from not executing to executing (FP, memory, alignment)"],
+  ["02","__DATA contiguous","CL4 domain-lookup stops reading garbage"],
+  ["03","ctor-runner","CL4 11 constructors run"],
+  ["04","DARWIN_RTKIT=1","The emulated DCP mailbox turns on - previously asleep"],
+  ["05","dtree_nr2","RTBuddy(DCP) releases the secure path and uses the mailbox"],
+  ["06","AppleDCP boots","The display driver runs its init against the mailbox"],
+  ["07","SCREEN ON","Our DCP paints the real iOS boot log on the panel - full scanout"]
 ];
 
 const COL = {ok:getcol("--ok"),partial:getcol("--partial"),blocked:getcol("--blocked"),missing:getcol("--missing"),ready:getcol("--phos"),phos:getcol("--phos")};
@@ -364,17 +364,17 @@ document.getElementById("tally").innerHTML=tallyDefs.map(([cl,l,n])=>
 document.getElementById("miles").innerHTML=MILES.map(([n,t,d])=>
   `<div class="mile"><div class="n">${n}</div><div><b>${t}</b><small>${d}</small></div></div>`).join("");
 
-const STLABEL={ok:["funciona","c-ok"],partial:["parcial","c-partial"],blocked:["bloqueado","c-blocked"],missing:["por construir","c-missing"],ready:["listo · espera píxeles","c-phos"],phos:["el objetivo","c-phos"]};
+const STLABEL={ok:["works","c-ok"],partial:["partial","c-partial"],blocked:["blocked","c-blocked"],missing:["to build","c-missing"],ready:["ready · awaiting pixels","c-phos"],phos:["the goal","c-phos"]};
 function select(id){
   document.querySelectorAll(".chip").forEach(g=>g.classList.toggle("sel",g.dataset.id===id));
   const c=C[id],[lbl,cls]=STLABEL[c.st];
-  const done=c.done.length?`<ul class="dlist done"><div class="lbl">Logrado</div>${c.done.map(x=>`<li><span>${x}</span></li>`).join("")}</ul>`:"";
-  const todo=c.todo.length?`<ul class="dlist todo"><div class="lbl">Falta</div>${c.todo.map(x=>`<li><span>${x}</span></li>`).join("")}</ul>`:"";
+  const done=c.done.length?`<ul class="dlist done"><div class="lbl">Achieved</div>${c.done.map(x=>`<li><span>${x}</span></li>`).join("")}</ul>`:"";
+  const todo=c.todo.length?`<ul class="dlist todo"><div class="lbl">Missing</div>${c.todo.map(x=>`<li><span>${x}</span></li>`).join("")}</ul>`:"";
   document.getElementById("detail").innerHTML=
     `<span class="pill ${cls}"><i class="dot ${cls}"></i>${lbl}</span>
      <h2>${c.name}</h2><div class="role">${c.sub}</div>
      <p class="blurb">${c.blurb}</p><p style="font-size:12.5px;color:#c8d5ce;margin:-8px 0 16px">${c.role}</p>
-     ${done}${todo}<p class="hint">Tocá otro chip de la placa para explorarlo.</p>`;
+     ${done}${todo}<p class="hint">Tap another chip on the board to explore it.</p>`;
 }
 select("cl4");
 
@@ -394,7 +394,7 @@ btns.forEach(b=>b.addEventListener("click",()=>{
     o.e.style.opacity=on?1:.12;
   });
   document.querySelectorAll(".flow").forEach(f=>{
-    // hide flow dots whose start chip is filtered out — approx by opacity
+    // hide flow dots whose start chip is filtered out - approx by opacity
     f.style.opacity=setk?0:.85;
   });
 }));

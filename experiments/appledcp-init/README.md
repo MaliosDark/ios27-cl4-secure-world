@@ -1,4 +1,4 @@
-# AppleDCP init bring-up — analysis + patch design
+# AppleDCP init bring-up - analysis + patch design
 
 Authorized security research (own machine). Goal: get the guest's IOMobileFramebuffer /
 AppleDCP to open the AFK endpoint against our emulated DCP (`hw/arm/apple_dcp.c`) so
@@ -52,7 +52,7 @@ anchored on DT strings / semantic decode, not a symbol dump (per CLAUDE.md guard
 
 ## 1. Reverse of the two crashes
 
-### 1a. Crash B (`far=0xb1`) is the kernel PANIC LOG, **not** an AppleDCP state object — RETRACTION
+### 1a. Crash B (`far=0xb1`) is the kernel PANIC LOG, **not** an AppleDCP state object - RETRACTION
 
 Prior model (RESUME UPDATE 17) called `0xfffffff00b6c08b8` "a DCP STATE object pointer".
 That attribution is wrong. Evidence:
@@ -87,7 +87,7 @@ Strings referenced (fo via `__TEXT` @0): `pram` (`0x70d075f`), `reg` (`0x70d0b65
 (`0x70d0315`), `DeviceTree overflow…` (`0x70d02eb`). No AppleDCP driver looks these up.
 
 The **consumer** at crash B (`0xfffffff00ac6e094`, fo `0x3c6a094`) reads that same global and
-fills a panic header — it copies the **kernel version banner** (`"Darwin Kernel Version
+fills a panic header - it copies the **kernel version banner** (`"Darwin Kernel Version
 27.0.0…T8140"`, `0x7044583`) into `[buf+0xd9]` with `w2=0x200`, stores a `double` (uptime)
 at `[buf+0xb1]`, sets flag bits from a bitmask arg (`w22`), and references
 `"Warning: clock is locked…"` (`0x7068bd3`). That is `PE`/`debug_buf` panic-header code, run
@@ -125,21 +125,21 @@ Shape: a **stride-0x18 table of `{key@+0, cb@+8, cb2@+0x10}`**, iterated; each `
 PAC-A pointer signed with discriminator `0xba5`; on the entry whose `cb` returns the match
 key, the `matched` path zeroes a large stack struct and calls `cb2` with discriminator
 `0x3b24`. This is a generic "ask each registered handler, first that claims the id wins"
-dispatcher. `0xba5` is **not** subsystem-unique (70 sign/call sites across base XNU —
+dispatcher. `0xba5` is **not** subsystem-unique (70 sign/call sites across base XNU - 
 `scripts/scan.py`-style scan), so it is a shared callback type, not a DCP marker.
 
 `0xac9376c` has **no direct `bl` caller** anywhere in `__TEXT_EXEC`
-(`scripts/scan.py bl 0xfffffff00ac9376c` → none) — it is reached indirectly (installed as a
+(`scripts/scan.py bl 0xfffffff00ac9376c` → none) - it is reached indirectly (installed as a
 function pointer / vtable slot and `blr`'d).
 
 The fault: `x8 = [x2+8]` is **non-null but not correctly signed** (`blraa` yields the
 misaligned `pc 0x…459`). With `DARWIN_NOPAC=1` it still crashes, so it is not a PAC-strip
-problem — the *table entry itself is garbage*. A never-populated BSS table would be all-zero →
+problem - the *table entry itself is garbage*. A never-populated BSS table would be all-zero →
 `cbz x8` → clean exit, no crash. A **garbage non-zero** `cb` means the table is
-stale/uninitialised heap or a partially-built structure — i.e. an init step that should have
+stale/uninitialised heap or a partially-built structure - i.e. an init step that should have
 filled valid entries **before** this walk did not run.
 
-### 1c. Why the init step didn't run — the device-tree gate
+### 1c. Why the init step didn't run - the device-tree gate
 
 The DT `iop-dcp-nub` node carries `routes` (→ secure exclave mailbox
 `com.apple.service.SecureRTBuddyDCP`) and `no-firmware-service`. Empirically (RESUME UPDATE
@@ -167,14 +167,14 @@ Interpretation, consistent with all evidence:
 handler table and state; neither DT variant provides a path where AppleDCP populates the table
 itself and boots the coprocessor over the plain ASC mailbox we emulate. The exact branch that
 selects secure-vs-normal firmware inside the AppleDCP kext (`0x89ee530..0x89f6b70`) was **not**
-pinned this pass (see reveal procedure in §2/§4) — but its *effect* is fully characterised, and
+pinned this pass (see reveal procedure in §2/§4) - but its *effect* is fully characterised, and
 the highest-value next action does not require pinning it (§4 step 1 unmasks the real panic).
 
 ---
 
 ## 2. Minimal interventions to reach `[dcp] AFK INIT` (ordered by preference)
 
-### (a) Device-tree first — no kernel patch
+### (a) Device-tree first - no kernel patch
 
 1. **Back the pram region so crash B stops masking crash A.** The `pram`/`APL,OSXPanic` node
    exists in the DT but its `reg` physical range is (almost certainly) not RAM-backed in the
@@ -186,14 +186,14 @@ the highest-value next action does not require pinning it (§4 step 1 unmasks th
    instead of `Kernel data abort … far 0xb1`. This alone converts crash B into readable
    diagnostics and is the single most useful step.
 
-2. **Keep `dtree_nr2` (`DCP_NO_ROUTES=1`, `no-firmware-service` KEPT)** as the base — it already
+2. **Keep `dtree_nr2` (`DCP_NO_ROUTES=1`, `no-firmware-service` KEPT)** as the base - it already
    removes the secure-route wait. Then probe DT properties that flip AppleDCP onto a
    self-firmware path. Candidates to try (each via `EXTRA_NODES` / a new `dt_fixup.py` toggle),
    observing whether `CPU_CONTROL RUN` is written (→ `[rtkit:dcp] CPU_CONTROL RUN` in QEMU):
-   - drop `no-firmware-service` **and** add `region-base`/`region-size` (`DCP_REGION=1`) so the
+ - drop `no-firmware-service` **and** add `region-base`/`region-size` (`DCP_REGION=1`) so the
      nub looks like a normal firmware-loading RTKit IOP (matches `iop-ans-nub`);
-   - set `DCP_POWER_MODE=power-managed` (so RTBuddy powers the IOP itself);
-   - ensure endpoint `0x24` is advertised (already emulated in `apple_dcp.c`).
+ - set `DCP_POWER_MODE=power-managed` (so RTBuddy powers the IOP itself);
+ - ensure endpoint `0x24` is advertised (already emulated in `apple_dcp.c`).
    *Expected observable:* if any combination makes RTBuddy(DCP) boot the coprocessor,
    `[rtkit:dcp] CPU_CONTROL RUN` → `HELLO` → `EPMAP` → `STARTEP 0x24` → `[dcp] AFK INIT`.
 
@@ -210,7 +210,7 @@ replacement bytes from the project's Keystone helpers (`asm()`, `NOP`, `MOV_W0_0
   find the branch of the form `bl <get-secure-service>; cbz/cbnz x0, <secure-only path>` (or a
   DT-property test of `no-firmware-service`). That branch is the gate.
 - **Patch intent (branch gate only):** turn the "secure service present?" test so it takes the
-  **normal-world** path — i.e. replace the conditional branch that jumps into the secure-only
+  **normal-world** path - i.e. replace the conditional branch that jumps into the secure-only
   init with an unconditional fall-through into the self-init path (Keystone `B`), or NOP the
   early-return that skips handler registration. Log the site as `vmaddr / file-offset /
   before→after` and **also update `research/0_binary_patch_comparison.md`** (project rule).
@@ -232,7 +232,7 @@ register stubs so any disp0/dcp-expert MMIO AppleDCP touches during self-init do
 
 ---
 
-## 3. Next stage — after AFK is up, decoding the guest's real surface
+## 3. Next stage - after AFK is up, decoding the guest's real surface
 
 Once `[dcp] AFK INIT` fires, `dcp_ep_handler` in `hw/arm/apple_dcp.c` already drives the AFK
 ring handshake to "transport up":
@@ -250,18 +250,18 @@ The gap: **`RBEP_RECV` is only logged**, never read. That is where IOMFB/EPIC RP
   `drivers/gpu/drm/apple/afk.c` + `dcp/` (we are the coprocessor; their AP-side send == our
   receive).
 - The IOMFB calls to decode for a surface:
-  - **swap_start / swap_submit** (`IOMobileFramebuffer::swap_submit_dcp`): carries the
-    surface's **IOSurface descriptor** — the DMA/`iova` base of the pixel buffer, `stride`
+ - **swap_start / swap_submit** (`IOMobileFramebuffer::swap_submit_dcp`): carries the
+    surface's **IOSurface descriptor** - the DMA/`iova` base of the pixel buffer, `stride`
     (bytes/row), `width`, `height`, and pixel format. This is the address our scanout must read
     instead of the synthetic frame.
-  - **set_matrix / setup_video_limits / set_parameter**: mode/size confirmation.
+ - **set_matrix / setup_video_limits / set_parameter**: mode/size confirmation.
 - Concretely in `apple_dcp.c`:
   1. Give `AppleDCPState` a parsed-surface struct `{uint64_t surf_iova; uint32_t w,h,stride,fmt;}`.
   2. In `RBEP_RECV`, read the TX ring at `s->bfr_dva`, walk EPIC sub-messages, and on the
      swap/surface-register call fill that struct; set `s->surface_live = true`.
   3. In `dcp_paint`, when `surface_live`, replace the synthetic renderer with
      `address_space_read(&address_space_memory, surf_iova, …)` of `stride*h` bytes and blit
-     (format-convert if needed) into `fb_base` — the DarwinFB console already scans out
+     (format-convert if needed) into `fb_base` - the DarwinFB console already scans out
      `fb_base` (`darwin.c` `init_framebuffer` / `darwin_fb_update`).
   4. Send the matching AFK **completion/ack** back on the RX ring so the guest's swap completes
      and it queues the next frame (otherwise IOMFB stalls after one surface).
@@ -281,7 +281,7 @@ Each step: **what / where / expected observable.**
    reserved RAM. *Where:* `hw/arm/darwin.c` (RAM carve-out like `init_framebuffer`) or a new
    `PRAM_BACK=1` in `dt_fixup.py`. *Expected:* on the AppleDCP fault, serial prints the **real**
    AppleDCP panic (string + `pc` in `0x89ee530..0x89f6b70`) instead of
-   `Kernel data abort … far 0x00…b1`. **Do this first — everything else keys off the revealed panic.**
+   `Kernel data abort … far 0x00…b1`. **Do this first - everything else keys off the revealed panic.**
 
 2. **Symbolicate & reveal the AppleDCP secure-firmware gate.**
    *What:* take the panic `pc`, `scripts/fileset.py <runtime-0x20000000>` to confirm it's in the
@@ -305,12 +305,12 @@ Each step: **what / where / expected observable.**
    `[dcp] AFK INIT`. **Update `research/0_binary_patch_comparison.md`.**
 
 5. **AFK transport up → confirm surface traffic.**
-   *What:* nothing new — `apple_dcp.c` already answers `INIT/GETBUF/INIT_TX/INIT_RX/START`.
+   *What:* nothing new - `apple_dcp.c` already answers `INIT/GETBUF/INIT_TX/INIT_RX/START`.
    *Expected:* `[dcp] AFK transport up on endpoint 0x24` then `[dcp] AFK RECV` when the guest
    posts an IOMFB message.
 
 6. **Decode the surface and scan it out.**
-   *What:* implement §3 — read the TX ring at `bfr_dva` on `RBEP_RECV`, parse the swap/surface
+   *What:* implement §3 - read the TX ring at `bfr_dva` on `RBEP_RECV`, parse the swap/surface
    call for `{iova,stride,w,h,fmt}`, blit guest surface → `fb_base`, ack on the RX ring.
    *Where:* `hw/arm/apple_dcp.c`. *Expected:* the DarwinFB console shows the guest's **real**
    IOMFB surface (SpringBoard/boot UI) rather than the synthetic bring-up frame, and swaps keep
@@ -320,14 +320,14 @@ Each step: **what / where / expected observable.**
 
 ## 5. Scripts (in `./scripts/`, use `/Users/maliosdark/vphone-cli/.venv`)
 
-- `kc.py` — segment map + static/runtime disassembly + v2f/f2v + adrp/add xref.
+- `kc.py` - segment map + static/runtime disassembly + v2f/f2v + adrp/add xref.
   `kc.py dis 0xfffffff00ac9376c 60`, `kc.py disr <runtime> 40`, `kc.py v2f <v>`.
-- `fileset.py` — map a static vmaddr to its owning `LC_FILESET_ENTRY` kext + segment.
+- `fileset.py` - map a static vmaddr to its owning `LC_FILESET_ENTRY` kext + segment.
   `fileset.py 0xfffffff00ac9376c 0xfffffff00b6c08b8`.
-- `scan.py` — resyncing scanner over `__TEXT_EXEC`. `scan.py ea <page> <disp>` finds all
-  str/ldr to a global (adrp+disp aware; **note** capstone returns the adrp immediate signed —
+- `scan.py` - resyncing scanner over `__TEXT_EXEC`. `scan.py ea <page> <disp>` finds all
+  str/ldr to a global (adrp+disp aware; **note** capstone returns the adrp immediate signed - 
   the script masks to unsigned 64-bit). `scan.py bl <target>` finds direct callers.
-- `sym.py` — LC_SYMTAB symbolicator (this kernelcache is stripped at top level, so it returns
+- `sym.py` - LC_SYMTAB symbolicator (this kernelcache is stripped at top level, so it returns
   nothing here; kept for kernelcaches that do carry a symtab).
 
 ### Cited sites (vmaddr / file offset / fileset)
@@ -346,7 +346,7 @@ Each step: **what / where / expected observable.**
 | DT lookup / get-property helpers       | `0xfffffff00b35a1d8` / `0xfffffff00b359fc4` | `0x43561d8` / `0x4355fc4` | com.apple.kernel |
 | AppleDCP kext `__TEXT_EXEC`            | `0xfffffff0089ee530..0x89f6b70` | `0x19ea530..0x19f2b70` | com.apple.driver.AppleDCP |
 
-QEMU side (read-only reference, live tree — do not edit here):
+QEMU side (read-only reference, live tree - do not edit here):
 `hw/arm/apple_dcp.c` (`dcp_ep_handler`, `RBEP_*`, `bfr_dva`, `dcp_paint`, `apple_dcp_attach`),
 `hw/arm/apple_rtkit.c` (`rtkit_write`→`ASC_CPU_CONTROL_RUN`→`apple_rtkit_boot`, `handle_a2i`),
 `hw/arm/darwin.c` (`init_rtkit_dcp`, `init_framebuffer`, mailbox `0x412E00000`).

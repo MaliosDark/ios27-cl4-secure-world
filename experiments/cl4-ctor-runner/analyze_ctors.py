@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# analyze_ctors.py — reproduce the CL4 __mod_init_func constructor analysis.
+# analyze_ctors.py - reproduce the CL4 __mod_init_func constructor analysis.
 #
 # Run:  source /Users/maliosdark/vphone-cli/.venv/bin/activate && python3 analyze_ctors.py
 #
@@ -8,7 +8,7 @@
 #   __DATA -> firmware/exclave_comp/tadk  (vmaddr base 0xc068c000)
 #
 # Everything is derived from decode (mnemonic/operands) or raw-byte encoding
-# scans — no hardcoded per-kernel symbol dumps.
+# scans - no hardcoded per-kernel symbol dumps.
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN
 import struct, os

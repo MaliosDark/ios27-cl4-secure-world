@@ -1052,3 +1052,26 @@ __const offset=0). cache-map path blocked by (kernel-VM OR cryptex-registration)
 Achieved this arc: root mounts, launchd execs, dyld disk-loads (disk-mode), AMFI accepts the
 cache signature (trust cache). GPU is NOT the blocker (software render path exists); the gate
 is getting the dyld cache actually mapped, which is gated by cryptex registration/Image4.
+
+## UPDATE 36 - ROADMAP found: super-tart-vphone-writeup (wh1te4ever) boots full iOS in a vphone
+darwin-vm README is explicit: barebones, no springboard/graphics/GUI (its "launchd" is the
+restore-ramdisk bash via com.jprx.bash, loose dylibs - NOT the full OS with cryptex). We are
+pushing far past its design. But a PROVEN roadmap exists for a virtual iPhone:
+wh1te4ever/super-tart-vphone-writeup. Their recipe for the cryptex/dyld-cache + codesign:
+ 1. dyld cache SYMLINKS (we were missing these):
+    /System/Library/Caches/com.apple.dyld -> /System/Cryptexes/OS/System/Library/Caches/com.apple.dyld/
+    /System/DriverKit/System/Library/dyld -> /System/Cryptexes/OS/System/DriverKit/System/Library/dyld
+ 2. Image4/nonce bypass: they patch bootloaders' image4_validate_property_callback (search
+    0x4447 in IDA, epilogue -> return 0). darwin-vm loads XNU directly (no iBoot), so the
+    equivalent is patching AppleImage4 in the kernelcache (our serial: "AppleImage4:
+    magazine[cptx]: failed to read nonce slot data: 2"). Alt: set the nonce-seeds NVRAM var
+    (Cryptiiiic gist: version u32 + 48B bootmanifest-hash + 40B seed structs; cryptex1 boot
+    nonce at index 7 = com.apple.private.img4.nonce.cryptex1.boot).
+ 3. SSV bypass (3 kernel patches): _apfs_vfsop_mount, _authapfs_seal_is_broken, _bsd_init
+    rootvol auth. (Our root already mounts, so maybe partial.)
+ 4. TXM patched to accept unsigned binaries (run binaries not in trustcache) - the codesign
+    bypass at the TXM coprocessor level (we load firmware/txm; TXM is patchable).
+ 5. launchd.plist edits + patch launchd_cache_loader.
+GPU/SpringBoard: not AGX emulation - iOS software-renders into the framebuffer we scan out
+(QEMUAppleSilicon/Inferno proves for iOS14). Gate is userspace via the above.
+First concrete step taken: added the two dyld-cache symlinks to rootfs_with_cryptex.dmg.

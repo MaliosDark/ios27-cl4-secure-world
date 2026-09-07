@@ -1,4 +1,4 @@
-# RESUME: iOS 27 secure-world (CL4) bring-up in darwin-vm - state & next steps
+# RESUME: iOS 27 secure-world (CL4) bring-up in darwin-vm — state & next steps
 
 Self-contained handoff so no knowledge is lost. Full narrative is in
 FINDINGS-ios27-display.md (3258 lines). This file is the actionable state.
@@ -17,12 +17,12 @@ only if the SK (Secure Kernel = exclaves) domain is running. So: boot the SK.
 - It faults early (PC=0x200) because its chained pointers are not yet slid.
 
 ## Secure-world components (extracted this session)
-- `firmware/exclavecore` - 32MB DNUB bundle (exclavecore_bundle.t8140.RELEASE.im4p
+- `firmware/exclavecore` — 32MB DNUB bundle (exclavecore_bundle.t8140.RELEASE.im4p
   unwrapped). Parse with `parse_exclavecore.py`. TOC (24-byte entries: tag u32,
   offset u64, size u64, type u32; TOC starts at file 0x284):
     txtk 0x18000/0x68c000  = SECURE KERNEL (Mach-O arm64e, __TEXT@0xc0000000, entry 0xc00994f0)
     txtr, txtu, tadk/r/u, knlr/knlu (metadata), tsru 0x1d20000/0x1a8000 = exclave trustcache
-- `firmware/exclave_comp/txtk` - the extracted secure kernel (load with `-cl4`).
+- `firmware/exclave_comp/txtk` — the extracted secure kernel (load with `-cl4`).
 - ExclaveOS dmg (`exclave/.../decrypted/094-14052-182.dmg`) = secure userspace
   (System/ExclaveKit: dyld, Tightbeam IPC, secure frameworks). Not needed to boot SK.
 
@@ -37,7 +37,7 @@ only if the SK (Secure Kernel = exclaves) domain is running. So: boot the SK.
   PUSH_SEG(cl4,"__DATA")->CL4-rw; PUSH_SEG(cl4,"__LINKEDIT")->CL4-le.
   `bytes_before_sptm` includes `(have_cl4 ? cl4_mi.virthi-cl4_mi.virtlo : 0)`.
 - `hw/arm/apple_regs.c`: CL4 presence via `info->cl4_f.buf != NULL` (NOT a
-  device-tree probe - that asserts on missing region and broke baseline).
+  device-tree probe — that asserts on missing region and broke baseline).
   CTRR-C lower = CL4-rx (else DeviceTree). CTXR-B = [CL4-rx,CL4-rx] (else CL4-dummypage).
 
 ## The panic chain conquered (each fix advanced SPTM; read panics via QMP)
@@ -70,14 +70,14 @@ load base when it dereferences them, they must be slid to the PHYSICAL base.
 ### Next step (implement): pre-slide CL4 chained pointers in the loader
 In xnuboot_sptm.c after PUSH_SEG(cl4,"__DATA"), walk seg[1]'s chains and rebase.
 For ptr_format=12 (ARM64E_USERLAND24), each 8-byte slot:
- - if bit63 (auth): { target:32 (offset from base), diversity:16, addrDiv:1,
+  - if bit63 (auth): { target:32 (offset from base), diversity:16, addrDiv:1,
     key:2, next:11, auth:1 } -> new = base + target  (drop PAC bits; QEMU may
-    have PAC off, or set signed pointer - try plain rebase first)
- - else (rebase): { target:36? , high8:8, next:11, bind:1, auth:1 } - for
+    have PAC off, or set signed pointer — try plain rebase first)
+  - else (rebase): { target:36? , high8:8, next:11, bind:1, auth:1 } — for
     USERLAND24 the unauth rebase target is `target` (low bits) + (high8<<...);
     canonical: unpackTarget = (raw & 0xFFFFFFFFFF) then runtimeOffset. USE the
     exact dyld_chained_ptr_arm64e_rebase24 bitfields from mach-o/fixup-chains.h.
- - `next` (11 bits) * stride(8) steps to the next pointer in the page; next==0 ends.
+  - `next` (11 bits) * stride(8) steps to the next pointer in the page; next==0 ends.
   page_start[pi] gives the first pointer offset in page pi (0xFFFF = no chain).
 Base to use: CL4 physical load address = phys of CL4-rx (printed as
 "[cl4] phase1 rx phys 0x...", e.g. 0x10006884000). Rebase target is relative to
@@ -85,7 +85,7 @@ CL4's vmaddr base 0xc0000000, so: new_ptr = cl4_phys_base + (target_vmaddr - 0xc
 where target_vmaddr = 0xc0000000 + chained_offset  =>  new_ptr = cl4_phys_base + chained_offset.
 ALTERNATIVE if physical-slide fails at MMU turn-on: SPTM has
 SPTM_FUNCTIONID_SLIDE_REGION / register_core_file_region driven by
-header->kernelSlide - register CL4 as a slidable core-file region instead.
+header->kernelSlide — register CL4 as a slidable core-file region instead.
 
 ### Test after implementing
 Boot with `-cl4 firmware/exclave_comp/txtk -dtree firmware/dtree_dbg` (SPTM_DEBUG
@@ -106,7 +106,7 @@ publishes, AppleDCPLinkServiceSoC binds, IOMobileFramebuffer -> pixels.
 ## Patchers (kernel, in darwin-vm/, each reproduces a documented result)
 patch_rtbuddy_secureproxy_v2.py (verified-safe null guard, IN bootkc now),
 patch_rtbuddy_route.py / _route_timeout.py / _route_skip.py / _route_skip0.py
-(all cascade to panics - see FINDINGS Parts 32-39; the real fix is the secure world).
+(all cascade to panics — see FINDINGS Parts 32-39; the real fix is the secure world).
 firmware/bootkc = silence_logs + secureproxy_v2. firmware/bootkc.prepatch = clean baseline.
 
 ## CRITICAL CORRECTION (found after Part 44): __DATA was garbage
@@ -122,17 +122,17 @@ valid CL4 vmaddrs (chain starts __DATA+0x8, stride next*8, target = offset from
 ### The real fix (do this): reconstruct the full CL4 Mach-O, then apply fixups
 1. Build a contiguous CL4 macho file: [0:0x68c000]=txtk(__TEXT),
    [0x68c000:0x6d4000]=tadk(__DATA), [0x6d4000:...]=__LINKEDIT (filesize 0x12970;
-   component unknown - zero-fill first, boot likely doesn't need symbols).
+   component unknown — zero-fill first, boot likely doesn't need symbols).
    The macho load commands already point at these fileoffs.
 2. Load with -cl4 <reconstructed>. Now PUSH_SEG(__DATA) gets real chained data.
 3. Apply chained fixups to __DATA (parse __TEXT.__chain_fixups @file 0x669b30):
    for each slot new = BASE + target_field. BASE = CL4 physical load addr while
-   MMU off (or 0xc0000000 vmaddr if CL4 runs MMU-on - TEST physical first since
+   MMU off (or 0xc0000000 vmaddr if CL4 runs MMU-on — TEST physical first since
    observed SCTLR_EL1=0). Decoder (ptr_fmt 12): auth=(raw>>63)&1,
    next=(raw>>51)&0x7ff, target = auth? (raw&0xffffffff) : (raw&0x7ffffffffff).
    next*8 = bytes to next slot; next==0 ends chain. page_start[] per 0x4000 page,
    0xFFFF=no chain. Maybe SPTM slides it itself once real chained __DATA is present
- - try WITHOUT pre-slide first, then WITH.
+   — try WITHOUT pre-slide first, then WITH.
 
 ## UPDATE 2: cl4_full built; SPTM does NOT auto-slide; pre-slide needed
 Reconstructed `firmware/cl4_full` = txtk(__TEXT) + tadk(__DATA) + zero __LINKEDIT
@@ -153,13 +153,13 @@ Write new 8-byte value = rebased address (drop auth/next bits). If MMU-off phys
 rebase still faults after CL4 enables its MMU, switch to vmaddr rebase
 (0xc0000000+target) AND ensure SPTM maps CL4 (CL4 may expect MMU-on entry).
 
-## UPDATE 3 - BREAKTHROUGH: CL4 NOW EXECUTES (thousands of instructions)
+## UPDATE 3 — BREAKTHROUGH: CL4 NOW EXECUTES (thousands of instructions)
 The physical per-segment rebase WAS correct, but three QEMU-side bugs stopped CL4
 from running past its first SIMD instruction. All three are now fixed and CL4
 boots deep into its own initialisation. This is the single most important update.
 
 ### Root cause of the old "stuck at PC=0x200" symptom
-PC=0x200 EL1h with VBAR_EL1 nonzero was NOT an exception vector - it was the tail
+PC=0x200 EL1h with VBAR_EL1 nonzero was NOT an exception vector — it was the tail
 of a fault cascade. Traced with `-d int` (logs every taken exception + ESR/ELR/FAR):
   1. exception 30 [genter]  : SPTM (EL2) genters and ERETs to EL1 PC 0x1000691d4f0
      (= rx_phys 0x10006884000 + entry offset 0x994f0). CONFIRMS SPTM enters CL4 at
@@ -189,10 +189,10 @@ before XNU programs CPACR, so CL4 inherited CPACR=0. Fixes:
      check, add `if (env->currentg) return false;`. Without this the TRANSLATOR
      bakes ALIGN_MEM into CL4's TBs (because MMU off + no DC => "Device => require
      alignment"), so an unaligned `ldr q1,[x1]` still faulted even after fix B made
-     the runtime page Normal. Fix B alone is not enough - alignment is decided at
+     the runtime page Normal. Fix B alone is not enough — alignment is decided at
      translate time. Both B and C are required.
 
-  (An earlier attempt set CPACR in the EXCP_GENTER handler; it did NOT stick - the
+  (An earlier attempt set CPACR in the EXCP_GENTER handler; it did NOT stick — the
    correct single point is fp_exception_el via currentg. That hack was reverted.)
 
 ### Fault progression after each fix (all via `-d int`, first non-genter excp)
@@ -214,7 +214,7 @@ match (domain lookup/registration). The four match fns: 0x100069233c8, 0x1000692
 0x10006924080, 0x100069246dc. Next step: understand what domain/config CL4 expects
 from the SPTM->SK handoff (boot-args block CL4 builds at entry: it stored tags
 0x15,0x1a,0x2,0x3 into an array @vmaddr 0xc06ff3f0 in the entrypoint code) and why
-the match returns 0 - likely the handoff/config table (possibly in __DATA bss that
+the match returns 0 — likely the handoff/config table (possibly in __DATA bss that
 is zero-filled, or expected from a boot structure we don't provide) is empty.
 
 ### How to reproduce / debug (commands)
@@ -228,11 +228,11 @@ Ordered exec trace (filter to CL4 + low addrs, small log):
   -d exec,nochain -dfilter 0x0..0x1000,0x10006884000..0x10006f10000 -accel tcg,one-insn-per-tb=on
 CPU regs at a PC: add `,cpu` to -d and `-dfilter <pc>..<pc+4>`; last block prints X0..X30.
 NOTE: lldb software breakpoints in the CL4 physical range are UNRELIABLE on this
-gdb stub (never hit) - use `-d int` / `-dfilter` exec traces instead.
+gdb stub (never hit) — use `-d int` / `-dfilter` exec traces instead.
 Disasm CL4 by file offset (offset = phys - 0x10006884000) on firmware/exclave_comp/txtk
 via capstone (.venv has it).
 
-## UPDATE 4 - brk #1 characterised: bad "domain id" 0x50 from an object graph
+## UPDATE 4 — brk #1 characterised: bad "domain id" 0x50 from an object graph
 Registers at brk (via `-d exec,cpu -dfilter 0x1000691ec80..0x1000691ece4`):
   X19=0x50  X20=3  X08=0xc00000001  X01=0x10006f79788(domain-name table)
   X29=0x10006f5b890  X30=0x1000691ecc4  SP=0x10006f5b880
@@ -251,21 +251,21 @@ HYPOTHESIS: the object graph / config CL4 walks here is fed by the SPTM->SK hand
 that we do not supply (or by __DATA bss / __LINKEDIT which are ZERO in cl4_full).
 0x50 is not a plausible-but-off domain id, so the structure is likely uninitialised.
 NEXT STEPS to try:
-  1. Dump the object at x23 (ret of 0x1000691e008) and 0x1000691e008 itself - find
+  1. Dump the object at x23 (ret of 0x1000691e008) and 0x1000691e008 itself — find
      which global/handoff it reads; see if that global is zero (uninitialised).
   2. Check the CL4 entrypoint boot-info array it builds at vmaddr 0xc06ff3f0 (tags
-     0x15,0x1a,0x2,0x3 with values x9=adr, x0, x1) - this is the SPTM->SK handoff
+     0x15,0x1a,0x2,0x3 with values x9=adr, x0, x1) — this is the SPTM->SK handoff
      CL4 expects; we may need to populate a real handoff (domain table) there.
-  3. Consider providing __LINKEDIT (currently zeroed) - reconstruct from the real
+  3. Consider providing __LINKEDIT (currently zeroed) — reconstruct from the real
      linkedit if the lookup reads relocated/linkedit-backed data.
   4. As a research shortcut to keep moving: patch CL4 to accept id 0x50 (or make the
-     lookup return a valid domain) ONLY to see the NEXT stage - but the real fix is
+     lookup return a valid domain) ONLY to see the NEXT stage — but the real fix is
      feeding CL4 the correct domain handoff.
 STATUS: CL4 now boots from entry through full early init + a large SIMD memcmp and
 into domain registration. The "won't execute" barrier is BROKEN. Remaining work is
 feeding CL4 the correct SPTM->SK handoff so its domain graph is valid.
 
-## UPDATE 5 - __DATA made physically CONTIGUOUS; domain lookup now passes
+## UPDATE 5 — __DATA made physically CONTIGUOUS; domain lookup now passes
 Root of the 0x50 "bad domain id": CL4 runs MMU-off and reaches its own __DATA via
 PC-relative `adrp` (e.g. entry `adrp x1,0xc068c000`), which with MMU off lands at
 rx_phys + 0x68c000 = 0x10006F10000 (the CONTIGUOUS position). The split layout put
@@ -279,7 +279,7 @@ only registers CL4-rw / CL4-le descriptors pointing back into that block (no sec
 push). Rebase is now uniform: new = rx_phys + target_offset. Loader prints
 "[cl4] contiguous rx .. rw 0x10006F10000 le 0x10006F98000 ..".
 RESULT: the domain-descriptor lookup (0x1000691eba0) now SUCCEEDS. CL4 advances past
-it. (validate_region_order did NOT complain - the extra pre-DeviceTree page lives
+it. (validate_region_order did NOT complain — the extra pre-DeviceTree page lives
 inside the DeviceTree region, so CL4-ro end == DeviceTree start.)
 
 ### New frontier: null field in a CL4 __DATA-bss global
@@ -299,7 +299,7 @@ at +0x18/+0x38). NEXT: trace 0x1000691e008 fully to see what it reads to build t
 global, and what should have set [x23+8]/[x23+0x18]. This is CL4 runtime init, one
 layer past domain registration.
 
-## UPDATE 6 - null deref pinned to MISSING boot-info tags 1 and 3
+## UPDATE 6 — null deref pinned to MISSING boot-info tags 1 and 3
 The CL4 entrypoint builds a boot-info array of {tag,value} 16-byte entries at
 vmaddr 0xc06ff3f0 (= phys rx+0x6ff3f0 = 0x10006f833f0) from the registers SPTM
 passes at genter:
@@ -343,13 +343,13 @@ descriptor lookup; blocks on the SPTM->SK handoff missing tag1/tag3. Every fix t
 session moved CL4 strictly forward. The remaining work is reconstructing the SK
 handoff, not fighting the CPU/loader anymore.
 
-## UPDATE 7 - x1-injection PROBE works: CL4 advances past the domain deref
+## UPDATE 7 — x1-injection PROBE works: CL4 advances past the domain deref
 Added an EXPERIMENTAL probe (NOT a real fix; clearly marked in code):
- - hw/arm/xnuboot_sptm.c: write a minimal domain descriptor {domain_id, 0...} at
+  - hw/arm/xnuboot_sptm.c: write a minimal domain descriptor {domain_id, 0...} at
     the start of the CL4-dummypage; export g_cl4_entry_pc (= rx_phys + (entry-virtlo)
     = 0x1000691D4F0) and g_cl4_x1_inject (= scratch phys). domain_id defaults to
     0xC00000001, overridable via $CL4_DOMAIN_ID.
- - target/arm/tcg/helper-a64.c HELPER(exception_return): at the ERET whose target ==
+  - target/arm/tcg/helper-a64.c HELPER(exception_return): at the ERET whose target ==
     g_cl4_entry_pc, in guarded state, with x1 still 0, set x1 = g_cl4_x1_inject.
     (log: "[cl4] probe: injected x1=0x... at CL4 entry")
 RESULT: CL4 accepts domain id 0xC00000001, passes the tag3 deref + domain lookup, and
@@ -368,7 +368,7 @@ init is a CHAIN of such subsystems (domain descriptor -> registry (2,5) -> ...).
 synthesizing all of them by hand is open-ended. Two strategic options going forward:
   (A) Keep synthesizing CL4's init inputs piece by piece (this path); OR
   (B) Reverse the SPTM binary's SK bootstrap to reproduce the REAL handoff (one correct
-      structure instead of many hand-made pieces) - higher up-front cost, but then the
+      structure instead of many hand-made pieces) — higher up-front cost, but then the
       whole chain is satisfied at once; OR
   (C) Bypass CL4 entirely and emulate the SecureRTBuddyDCP endpoint in QEMU
       (apple_rtkit.c/apple_dcp.c scaffolding) so XNU's AppleDCPLinkServiceSoC attaches
@@ -378,7 +378,7 @@ layout it needs, and what registers domain 0xC00000001's descriptor. Also re-che
 whether 0xC00000001 is the RIGHT domain for this context or if the descriptor needs more
 fields than {id}.
 
-## UPDATE 8 - CL4 boot is an ordered chain; the blocker is the SPTM->SK handoff
+## UPDATE 8 — CL4 boot is an ordered chain; the blocker is the SPTM->SK handoff
 Probing further (0x10006924e58) shows a lazy singleton factory 0x10006925e70(2,5)
 returning NULL -> another uninitialised global. This is not one missing value but a
 CHAIN: CL4 init runs in order and each stage seeds the next.
@@ -417,9 +417,9 @@ synthesized boot does not give SPTM whatever it needs to build the real SK hando
       AppleDCPLinkServiceSoC attaches without the real secure kernel. Independent of the
       whole CL4 handoff problem; different (also deep) work.
 The x1-injection probe (UPDATE 7) is left in place behind g_cl4_entry_pc; it is
-experimental scaffolding, not a fix - remove or gate before any real integration.
+experimental scaffolding, not a fix — remove or gate before any real integration.
 
-## UPDATE 9 - Three-front push (parallel): SPTM reversal status (path B)
+## UPDATE 9 — Three-front push (parallel): SPTM reversal status (path B)
 Pursuing A, B, C in parallel. B (reverse SPTM's SK bootstrap) progress:
 - SPTM Mach-O (firmware/sptm): __TEXT @vmaddr 0xfffffff027004000 (fo 0, 0x18000);
   __TEXT_EXEC @0xfffffff027098000 (fo 0x94000, 0x64000); __DATA @0xfffffff027100000;
@@ -448,8 +448,8 @@ Pursuing A, B, C in parallel. B (reverse SPTM's SK bootstrap) progress:
 Paths A (CL4 init chain) and C (emulate SecureRTBuddyDCP) are being analyzed in parallel;
 findings to be merged here.
 
-## UPDATE 10 - Path C findings (emulate/bypass SecureRTBuddyDCP)
-"SecureRTBuddyDCP" is NOT a kernelcache constant - it comes from the device tree
+## UPDATE 10 — Path C findings (emulate/bypass SecureRTBuddyDCP)
+"SecureRTBuddyDCP" is NOT a kernelcache constant — it comes from the device tree
 (iop-dcp-nub `routes` -> exclave-service = com.apple.service.SecureRTBuddyDCP).
 Gate: com.apple.driver.RTBuddy RTBuddy::start() route loop (VA 0xfffffff00a7c5180..
 ..527c): builds a name-matching dict for com.apple.service.SecureRTBuddyDCP and calls
@@ -477,8 +477,8 @@ the 164MB Ap,ExclaveOS userspace; step "finish apple_dcp IOMFB/EPIC + scanout" i
 dominant cost and is common to BOTH the CL4 and the bypass routes -> it is worth building
 regardless of which gate we solve.
 
-## UPDATE 11 - Path A findings + THREE-FRONT SYNTHESIS (decision point)
-### Path A (CL4 init) - ROOT CAUSE identified
+## UPDATE 11 — Path A findings + THREE-FRONT SYNTHESIS (decision point)
+### Path A (CL4 init) — ROOT CAUSE identified
 The (2,5) factory null is a REGISTRY lookup, not an allocator:
   factory 0xc00a1e70: mrs x8,tpidr_el0; ldr x8,[x8,#0x10]; ldr x9,[x8] (list head);
   walk singly-linked list matching (key1,key2)=(2,5); return node.value ([node+0x18]);
@@ -522,7 +522,7 @@ and is REQUIRED BY EVERY route to pixels, so it is worth building now regardless
 The CL4 research (UPDATES 3-11) is preserved: if we ever bring up the real secure world,
 the constructor-pass + handoff findings are the key.
 
-## UPDATE 12 - Path C ground truth + no boot-framebuffer shortcut
+## UPDATE 12 — Path C ground truth + no boot-framebuffer shortcut
 Empirical state of the display path (baseline, NO -cl4, current bootkc has the
 secureproxy_v2 patch):
 - XNU boots to userspace: reaches launchd/dyld in the ramdisk ("hello from launchd.1",
@@ -541,9 +541,9 @@ secureproxy_v2 patch):
   framebuffer; the display comes ONLY through DCP. There is no simple-framebuffer path.
 => The screen genuinely requires DCP. To light it via path C the concrete milestones are:
    1. Make RTBuddy(DCP) actually boot the DCP over the ASC mailbox (so apple_dcp is
-      exercised). Options: (a) device-tree - turn iop-dcp-nub into a plain ASC-mailbox
+      exercised). Options: (a) device-tree — turn iop-dcp-nub into a plain ASC-mailbox
       RTKit endpoint (dt_fixup already strips its `routes`/secure-root-prefix, yet RTBuddy
-      still waited on the secure route, so DT alone was insufficient - investigate why);
+      still waited on the secure route, so DT alone was insufficient — investigate why);
       (b) kernel-patch the DCP transport selection to use the mailbox.
    2. Finish apple_dcp.c: map AFK rings at bfr_dva, implement IOMFB/EPIC RPC (mode-set /
       surface-register / swap), publish DCPEndpoint24 -> AppleDCPLinkServiceSoC ->
@@ -554,7 +554,7 @@ HONEST STATUS: every route to actual pixels (full CL4+ExclaveOS, or DCP-mailbox 
 large; the DCP IOMFB emulation is unavoidable and common to all. CL4 now executes and the
 whole secure-world boot chain + DCP gate are mapped and preserved.
 
-## UPDATE 13 - Path C: dtree_norm activates AppleDCP (next blocker = null vtable call)
+## UPDATE 13 — Path C: dtree_norm activates AppleDCP (next blocker = null vtable call)
 Booting with firmware/dtree_norm (DCP_NORMALIZE: iop-dcp-nub made structurally identical
 to iop-ans-nub, a plain ASC-mailbox RTBuddy IOP) changes the DCP behaviour:
 - 381 serial lines (vs 209 baseline). RTBuddy(DCP)::start no longer parks on the secure
@@ -580,7 +580,7 @@ NEXT for path C:
 The alignment/null-call is the classic ChefKiss-t8030 DCP bring-up sequence (per Parts
 26/36/37): several ordered null-derefs to patch before AppleDCP's start() completes.
 
-## UPDATE 14 - ctor-runner INTEGRATED and WORKING (path A real fix)
+## UPDATE 14 — ctor-runner INTEGRATED and WORKING (path A real fix)
 Integrated the agent's __mod_init_func constructor-runner (design in
 ios27-cl4-secure-world/experiments/cl4-ctor-runner) into the LIVE tree:
 - hw/arm/xnuboot_sptm.c: globals g_cl4_tramp_pc/g_cl4_ctors_done/g_cl4_tpidr; the
@@ -614,7 +614,7 @@ Either way the ctor-runner is the correct root-cause mechanism and is now in pla
 the x1 injection is still active alongside (can be dropped once ctor-seeding alone is
 confirmed sufficient for the domain descriptor).
 
-## UPDATE 15 - Path C: AppleDCP crash pinned (garbage PAC callback)
+## UPDATE 15 — Path C: AppleDCP crash pinned (garbage PAC callback)
 Mapped the dtree_norm AppleDCP panic (fileset kernelcache, slide 0x20000000, top-level
 segs: __TEXT 0xfffffff007004000/fo0, __TEXT_EXEC 0xfffffff008400000/fo0x13fc000, ...).
 Crash call site: static 0xfffffff00ac937c4 (runtime lr 0xfffffff02ac937c8), file off
@@ -638,7 +638,7 @@ after which the IOMFB/EPIC RPC layer must be built. This is the dominant remaini
 Two fronts now run in parallel: path C (this) foreground; path A per-thread registry
 (the (2,5) factory) via a background agent.
 
-## UPDATE 16 - ctor-runner + registry seed: advances through TPIDR/TPIDRRO/(2,5)/SVC
+## UPDATE 16 — ctor-runner + registry seed: advances through TPIDR/TPIDRRO/(2,5)/SVC
 Applied the per-thread-registry agent's findings + fallback seed. Progression of the
 CL4 ctor-pass frontier (each fix advances to the next, whack-a-mole as predicted):
 - msr tpidr_el0,xzr in trampoline tail (so CL4's domain-setup takes its tpidr==0 build
@@ -667,7 +667,7 @@ a fully-booted CL4 needs ExclaveOS for the DCP service. Path C (DCP bypass) rema
 pragmatic route to pixels. The ctor-runner + seed work is preserved and is the correct
 mechanism for the eventual full loader emulation.
 
-## UPDATE 17 - Path C: DCP MAILBOX EMULATION ACTIVATED (key discovery)
+## UPDATE 17 — Path C: DCP MAILBOX EMULATION ACTIVATED (key discovery)
 The DCP mailbox emulation (apple_rtkit/apple_dcp) is gated behind DARWIN_RTKIT=1
 (darwin.c:1260 init_rtkit_dcp) -- previously never enabled, which is why the mailbox
 saw no traffic. Enabling it:
@@ -677,15 +677,15 @@ Other display knobs: DARWIN_DISP=all (maps disp0/dcp/dcp0-expert register stubs)
 DARWIN_DART, DARWIN_PMGR, DARWIN_DCPFW (loads firmware/dcpfw). NOTE: DARWIN_DISP=all +
 DART + PMGR together broke very early boot (29 lines) -- add stubs selectively.
 Device-tree variant selection matters (checked all firmware/dtree*):
- - iop-dcp-nub routes / no-firmware-service:
+  - iop-dcp-nub routes / no-firmware-service:
     dtree_norm: routes=OFF, no-fw-svc=OFF  (drops both -> far=0xb1 no-firmware path)
     dtree_nr:   routes=OFF, no-fw-svc=OFF
     dtree_nr2:  routes=OFF, no-fw-svc=ON   <-- the one to use (no secure wait, keeps
                 the firmware-service property)
 Progression with DARWIN_RTKIT=1 DARWIN_FB=1:
- - dtree_nr2 + stock bootkc: 409 lines, then the AppleDCP callback-dispatch crash
+  - dtree_nr2 + stock bootkc: 409 lines, then the AppleDCP callback-dispatch crash
     (blraa x8,#0xba5 through a garbage PAC callback at 0xfffffff00ac937c4).
- - + bootkc.dcptest (patched that blraa -> `mov x0,xzr`, file off 0x3c8f7c4): no more
+  - + bootkc.dcptest (patched that blraa -> `mov x0,xzr`, file off 0x3c8f7c4): no more
     callback crash; next panic far=0xb1 at 0xfffffff00ac6e104:
       ldr x8,[global 0xfffffff00b6c08b8]  (x8 = DCP state object; it is NULL)
       stur d0,[x8, #0xb1]                 -> store to [NULL+0xb1] = far 0xb1.
@@ -703,7 +703,7 @@ unavoidable remaining cost (ChefKiss-t8030 scale).
 Reproduce: DARWIN_RTKIT=1 DARWIN_FB=1 qemu ... -bootkc firmware/bootkc.dcptest
   -dtree firmware/dtree_nr2 ...  (bootkc.dcptest = stock + blraa@0x3c8f7c4 -> mov x0,xzr)
 
-## UPDATE 18 - Ordering agent: ctor-runner was WRONG; real path-A mechanism is svc->SPTM
+## UPDATE 18 — Ordering agent: ctor-runner was WRONG; real path-A mechanism is svc->SPTM
 Agent (cl4-ctor-ordering) findings:
 - CL4 entry 0xc00994f0 calls: early bring-up 0xc00a7b3c -> domain-setup 0xc00a6ea4 ->
   main-init 0xc0098004. Domain-setup installs the REAL TPIDR_EL0 (setter 0xc00aa724 @
@@ -743,7 +743,7 @@ service) + needs the full IOMFB/EPIC RPC emulation + scanout (ChefKiss-t8030 sca
 Both are large multi-session efforts. Everything mapped, activated where possible, and
 preserved. The pixels-on-screen goal requires completing one of these emulation efforts.
 
-## UPDATE 19 - PANEL LIT with the REAL iOS boot log (screen ON)
+## UPDATE 19 — PANEL LIT with the REAL iOS boot log (screen ON)
 Built the display OUTPUT half end-to-end and put real guest content on the panel:
 - hw/arm/apple_dcp.c: apple_dcp now DRIVES the panel. A QEMU_CLOCK_REALTIME timer paints
   ~25fps straight into the framebuffer RAM (address_space_write to fb_base) that the
@@ -762,16 +762,16 @@ visible. Remaining for a graphical iOS UI: the guest IOMFB delivering real surfa
 (needs the full OS, not the ramdisk, + the IOMFB/EPIC RPC) -- but the panel now lights
 and shows the live kernel boot. env: DCP_NO_SCANOUT=1 disables the painter.
 
-## UPDATE 20 - Graphical iPhone boot screen on the panel (real progress + log)
+## UPDATE 20 — Graphical iPhone boot screen on the panel (real progress + log)
 apple_dcp.c now renders a real iPhone-style boot screen driven by the guest's own log:
 - Device identity "iPhone17,3 / iOS 27 * t8140".
 - A progress RING whose fill is inferred from actual boot milestones (boot_check_stage
   scans each completed log line: SPTM/XNU -> apfs/mountroot -> RTBuddy/IOService ->
   launchd/ignition -> done), eased smoothly, with a rotating comet head and % in the
-  center; stage label below ("Starting the XNU kernel" ... "iOS running").
+  center; stage label below ("Iniciando el kernel XNU" ... "iOS en marcha").
 - The live kernel/launchd console in the lower panel, phosphor, newest brightest.
 - RGB scanout proof strip. env DCP_NO_SCANOUT=1 disables it.
-Reached 100% / "iOS running" booting to userspace (launchd/ignition), the real
+Reached 100% / "iOS en marcha" booting to userspace (launchd/ignition), the real
 com.apple.xpc.launchd log rendered on the panel. shots/panel-boot-screen.png.
 Established (dead ends for real graphical UI, all tested): boot_args.Video is fully
 populated but iOS 27 does not render to it (uses IOMFB); AppleDCP's init crashes on an
@@ -781,15 +781,15 @@ service objects are absent. So the graphical iOS UI (SpringBoard) needs the full
 ramdisk) + AppleDCP/IOMFB init completing -- the large remaining effort. What the panel
 shows now is the real iOS boot, graphically, driven end-to-end by our emulated DCP.
 
-## UPDATE 21 - Panel polish: panic state + vignette
+## UPDATE 21 — Panel polish: panic state + vignette
 apple_dcp.c boot screen now reflects the real boot outcome: boot_check_stage sets
 boot_panic on "panic("/"Panicked" -> the progress ring turns red, center shows "!",
 label "KERNEL PANIC -- ver consola". Added a soft edge vignette so the panel reads like
-glass. Normal boot (dtree_dbg) shows the green ring at 100% "iOS running" with the real
+glass. Normal boot (dtree_dbg) shows the green ring at 100% "iOS en marcha" with the real
 libignition/launchd sequence (hello from launchd.1, ignition sequence complete).
 shots/panel-boot-polished.png.
 
-## UPDATE 22 - Interactive panel: keyboard -> guest UART wired
+## UPDATE 22 — Interactive panel: keyboard -> guest UART wired
 Wired the display window's keyboard to the guest so you can type on the panel:
 - hw/char/exynos4210_uart.c: darwin_uart_inject(buf,len) pushes bytes into the UART RX
   FIFO via exynos4210_uart_receive; g_darwin_uart captured in exynos4210_uart_create.
@@ -805,17 +805,17 @@ interactive shell needs the full OS (or a shell-enabled boot), same limitation a
 graphical UI. The panel is now interactive-CAPABLE end-to-end; it becomes usable the
 moment the guest presents a console.
 
-## UPDATE 23 - Full-OS boot path wired to the lit panel + keyboard
+## UPDATE 23 — Full-OS boot path wired to the lit panel + keyboard
 run_rootfs.sh now boots the full iOS rootfs WITH our panel: DARWIN_RTKIT=1 (emulated DCP)
 + DARWIN_FB=1 (framebuffer + on-panel keyboard) alongside DARWIN_AIC/DART/DISP, -serial
 mon:stdio, no -display none (a QEMU window opens). Drop a decrypted rootfs .dmg (>1G) in
 darwin-vm/rootfs/ (or set ROOTFS=) and run it -> full OS boots with the lit iPhone panel
-and keyboard->guest wired. Two entry points: view_screen.sh (restore ramdisk, what we
+and keyboard->guest wired. Two entry points: ver_pantalla.sh (restore ramdisk, what we
 demo now) and run_rootfs.sh (full OS, needs the user's rootfs -- ChefKiss: firmware
 acquisition/decryption is the user's, not automated). Everything except the rootfs itself
 is plug-and-play: panel scanout, boot screen, keyboard, DCP mailbox.
 
-## UPDATE 24 - INTERACTIVE ROOT SHELL on the panel (bash-5.3#)
+## UPDATE 24 — INTERACTIVE ROOT SHELL on the panel (bash-5.3#)
 The restore ramdisk already ships a debug shell: /bin/bash + LaunchDaemon
 com.jprx.bash.plist (Program=/bin/bash, StdIn/Out/Err=/dev/console, Interactive,
 KeepAlive). launchd spawns it ("Successfully spawned bash[3]"; "bash-5.3#" prompt seen
@@ -824,19 +824,19 @@ reaches bash: typing runs commands (bash echoed "command not found"). So we have
 interactive ROOT shell on the iPhone panel with NO full rootfs needed. Caveats: bash's
 /dev/console is shared with launchd's own logging, so output interleaves with launchd
 lines; and QMP send-key must use valid lowercase qcodes (uppercase names are invalid --
-a test artifact, not the wiring). On a real keyboard in the QEMU window (view_screen.sh)
+a test artifact, not the wiring). On a real keyboard in the QEMU window (ver_pantalla.sh)
 input is one key at a time. shots/panel-root-shell.png shows bash-5.3# on the panel.
 
-## UPDATE 25 - keyboard mapping fixed; shell input verified
+## UPDATE 25 — keyboard mapping fixed; shell input verified
 Bug: darwin_kbd_event treated evt->key.key as a QKeyCode, but it is a LINUX keycode
 (ui/input.c: evt.key.key = qemu_input_key_value_to_linux(...)). Fixed with
 qemu_input_linux_to_qcode(evt->key.key) before the QKeyCode switch. Now typed chars reach
 bash correctly (verified "uname"/"ls" arriving at bash-5.3#). Two bash-5.3# prompts +
 typed "ls" visible on the panel (shots/panel-shell-typing.png). Interactive root shell on
 the iPhone panel is live and usable; only cosmetic issue is launchd sharing /dev/console.
-So: view_screen.sh now gives a lit iPhone panel + a working keyboard into a root bash.
+So: ver_pantalla.sh now gives a lit iPhone panel + a working keyboard into a root bash.
 
-## UPDATE 26 - pram/panic-log backed: real AppleDCP panic UNMASKED (agent Step 1 done)
+## UPDATE 26 — pram/panic-log backed: real AppleDCP panic UNMASKED (agent Step 1 done)
 Agent (appledcp-init) correction: both DCP crashes are in BASE XNU, not the kexts; and
 far=0xb1 is the kernel PANIC LOGGER double-faulting because the /pram (embedded panic log)
 region was {0,0} -> map fails -> global paniclog ptr (0xfffffff00b6c08b8) NULL -> store to
@@ -856,7 +856,7 @@ firmware branch, flip it via DT or a minimal branch-gate patch so AppleDCP popul
 handler table and writes CPU_CONTROL RUN -> "[dcp] AFK INIT" against apple_dcp -> then
 decode the IOMFB surface (agent Step 6) and blit the guest's real surface to fb_base.
 
-## UPDATE 27 - FULL iOS rootfs boots to APFS mountroot (dram-size fix); md0 >4GB blocker
+## UPDATE 27 — FULL iOS rootfs boots to APFS mountroot (dram-size fix); md0 >4GB blocker
 The user has the decrypted full rootfs: rootfs/24A5430a__iPhone17,3/decrypted/
 094-13182-141.dmg (9.3 GB APFS, UDRW). Booting it as the ramdisk (rd=md0):
 - FIRST bug: SPTM data-aborted in EL2 (FAR 0xfffffff25d170000) with 0 serial, because the
@@ -877,7 +877,7 @@ The user has the decrypted full rootfs: rootfs/24A5430a__iPhone17,3/decrypted/
 Progress: full iOS now boots through SPTM/XNU to APFS mountroot on the lit panel; only the
 >4GB md0 ramdisk size stops the root mount.
 
-## UPDATE 28 - Two-front parallel + trustcache recon for the full OS
+## UPDATE 28 — Two-front parallel + trustcache recon for the full OS
 Two agents running in parallel on the two blockers/opportunities:
 - md0-size: find the exact XNU 32-bit truncation of the RAMDisk/md0 size (likely an
   `ldr w`/uint32 in the ramdisk-params reader before mdevadd) and the minimal widening
@@ -897,7 +897,7 @@ with the cs_enforcement bypass boot-args as a fallback if AMFI rejects rootfs bi
 Full OS currently boots (dram-size fix) through SPTM/XNU to APFS mountroot on the lit
 panel; md0 >4GB is the immediate blocker.
 
-## UPDATE 29 - md0 fix WORKS: real iOS root MOUNTS; next = dyld cache (Cryptex)
+## UPDATE 29 — md0 fix WORKS: real iOS root MOUNTS; next = dyld cache (Cryptex)
 Applied the md0-size agent's fix: 6 w->x widenings in XNU's md-device driver (the
 mdSize<<12 page->byte computations) -> firmware/bootkc.md0 (12 bytes differ, verified).
 Boot: bootkc.md0 + dtree_ios + rootfs 094-13182-141.dmg + -m 20G:
@@ -922,3 +922,24 @@ unbacked MMIO. Fix = back the MMIO: DARWIN_DISP=dcp0-expert (init_display_stub, 
 dart-* nodes). Then SEA gone -> CPU_CONTROL RUN -> [dcp] AFK INIT. Then apple_dcp.c
 RBEP_RECV: read TX ring @bfr_dva, decode swap_submit EPIC {iova,stride,w,h,fmt}, blit to
 fb_base. Details in experiments/appledcp-crashA/README.md.
+
+## UPDATE 30 - Cryptex injected: root mounts, launchd runs, dyld finds cache; AMFI now the wall
+Downloaded + decrypted the Cryptex1,SystemOS (094-13150-145.dmg.aea, 2.3GB) via
+`ipsw extract --remote` + `ipsw fw aea`. Injected it into the rootfs at
+/private/preboot/Cryptexes/OS. Key discovery for the image: iOS md0 expects a BARE
+APFS container (no GPT). macOS `hdiutil create -fs "Case-sensitive APFS"` defaults to
+GPTSPUD (GPT+EFI+Apple_APFS) -> XNU finds GPT at block 0 -> apfs mount fails EFTYPE(79).
+Fix: `-layout NONE` (bare) + Case-sensitive + System role via `diskutil apfs addVolume
+... -role S` (changeVolumeRole is blocked -69599; addVolume at creation works). Image is
+16GiB bare APFS; boot with dtree_ios24 (dram 24GiB) + -m 24G since ramdisk is loaded
+whole into guest RAM.
+Result: `apfs: mount-complete volume RaveSeedD47OS` (ROOT MOUNTS), launchd starts,
+dyld FINDS the cache at the injected path. New wall:
+  AMFI: '.../dyld_shared_cache_arm64e' is adhoc signed.
+  AMFI: unsuitable CT policy 0 for this platform/device, rejecting signature.
+  dyld[1]: dyld cache not loaded: code signature registration for shared cache failed
+  panic: launchd[1] fatal signal 6 -- libSystem.B.dylib no dyld cache
+So the cache is present but its cdhash is not in any loaded trust cache. Next: load the
+cryptex trust cache (094-13150-145.dmg.aea.trustcache) so AMFI trusts the cache cdhash,
+by merging its cdhashes into firmware/all_hashes and rebuilding ramdisk.tc, or teaching
+darwin-vm to load a second -tc. (Fallback: AMFI boot-args / kernelcache patch.)

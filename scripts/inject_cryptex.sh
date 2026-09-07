@@ -1,49 +1,45 @@
 #!/bin/zsh
-# inject_cryptex.sh — mete el Cryptex1,SystemOS (dyld shared cache + dylibs del
-# sistema) dentro del rootfs de iOS 27 en /private/preboot/Cryptexes/OS, para que
-# /sbin/launchd encuentre /usr/lib/libSystem.B.dylib via el shared cache.
+# inject_cryptex.sh — descifra (si hace falta) el Cryptex1,SystemOS y arma un
+# rootfs de iOS 27 que LO CONTIENE en /private/preboot/Cryptexes/OS, para que
+# /sbin/launchd encuentre el dyld_shared_cache y libSystem.B.dylib.
 #
-# El rootfs (094-13182-141) es el SystemOS "partido": NO trae dylibs ni el
-# dyld_shared_cache. Esos viven en el Cryptex1,SystemOS (~2.3GB), que debes
-# descargar/descifrar tu (constraint: firmware handling es tu parte).
+# El rootfs original es un volumen APFS "justo" (sin espacio libre), así que NO
+# se puede convertir a UDRW y agrandar: se crea una imagen APFS nueva de 20GB y
+# se copian dentro el rootfs + el cryptex. (Sin sudo: los archivos quedan owned
+# por tu uid pero world-readable; root en el guest mapea el cache igual.)
 #
-# USO:
-#   scripts/inject_cryptex.sh <cryptex_descifrado.dmg>
-#
-# Deja un rootfs nuevo escribible en firmware/rootfs_with_cryptex.dmg listo para
-# arrancar con -bootkc firmware/bootkc.md0 -dtree firmware/dtree_ios.
+# USO:  ./inject_cryptex.sh <cryptex 094-13150-145.dmg.aea | .dmg>
+# SALIDA: firmware/rootfs_with_cryptex.dmg   ->   ROOTFS=... ./run_rootfs.sh
 set -euo pipefail
-HERE=${0:a:h}
-CRYPTEX_DMG=${1:?ruta al Cryptex1,SystemOS descifrado (.dmg)}
-ROOT_SRC=$HERE/rootfs/24A5430a__iPhone17,3/decrypted/094-13182-141.dmg
-OUT=$HERE/firmware/rootfs_with_cryptex.dmg
+HERE=${0:a:h}; cd "$HERE"
+IN=${1:?ruta al Cryptex1,SystemOS (.dmg.aea o .dmg)}
+SRC=rootfs/24A5430a__iPhone17,3/decrypted/094-13182-141.dmg
+OUT=firmware/rootfs_with_cryptex.dmg
+WORK=cryptex/work; mkdir -p "$WORK"
 
-echo "[*] copiando rootfs a un dmg escribible (shadow)..."
+CX="$IN"
+if [[ "$IN" == *.aea ]]; then
+  echo "[*] descifrando cryptex AEA (ipsw baja la fcs-key de Apple; no imprime claves)..."
+  ipsw fw aea -o "$WORK" "$IN"
+  CX=$(find "$WORK" -maxdepth 1 -name '*.dmg' -size +1G | head -1)
+fi
+[[ -f "$CX" ]] || { echo "no hay cryptex dmg"; exit 1; }
+echo "[*] cryptex: $CX"
+
 rm -f "$OUT"
-# convertir a UDRW (read/write) para poder inyectar
-hdiutil convert "$ROOT_SRC" -format UDRW -o "$OUT"
-
-RMNT=$(mktemp -d /tmp/rw.XXXX)
-CMNT=$(mktemp -d /tmp/cx.XXXX)
-cleanup(){ hdiutil detach "$RMNT" >/dev/null 2>&1 || true; hdiutil detach "$CMNT" >/dev/null 2>&1 || true; }
+echo "[*] creando imagen APFS 20GB ..."
+hdiutil create -size 20g -fs APFS -volname iOSRoot -layout GPTSPUD -type UDIF "$OUT" >/dev/null
+N=$(mktemp -d /tmp/new.XXXX); S=$(mktemp -d /tmp/src.XXXX); C=$(mktemp -d /tmp/cxs.XXXX)
+cleanup(){ for m in "$N" "$S" "$C"; do hdiutil detach "$m" >/dev/null 2>&1 || true; done; }
 trap cleanup EXIT
-
-echo "[*] montando rootfs escribible..."
-hdiutil attach "$OUT" -owners on -nobrowse -mountpoint "$RMNT" >/dev/null
-echo "[*] montando cryptex read-only..."
-hdiutil attach "$CRYPTEX_DMG" -readonly -nobrowse -mountpoint "$CMNT" >/dev/null
-
-echo "[*] cryptex contiene:"; ls "$CMNT" | head
+hdiutil attach "$OUT" -nobrowse -mountpoint "$N" >/dev/null
+hdiutil attach "$SRC" -readonly -nobrowse -mountpoint "$S" >/dev/null
+hdiutil attach "$CX"  -readonly -nobrowse -mountpoint "$C" >/dev/null
+echo "[*] copiando rootfs -> imagen nueva ..."
+ditto "$S" "$N"
 echo "[*] copiando cryptex -> /private/preboot/Cryptexes/OS ..."
-DEST="$RMNT/private/preboot/Cryptexes/OS"
-mkdir -p "$DEST"
-# el cryptex tradicionalmente se monta como una carpeta con System/ dentro
-sudo ditto "$CMNT" "$DEST"
-
-echo "[*] verificando dyld_shared_cache dentro del rootfs..."
-find "$DEST" -iname 'dyld_shared_cache*' | head
-echo "[*] verificando libSystem.B.dylib alcanzable..."
-find "$DEST" -name 'libSystem.B.dylib' 2>/dev/null | head
-
-echo "[OK] rootfs con cryptex: $OUT"
-echo "    arranca:  KC=firmware/bootkc.md0 DT=firmware/dtree_ios RD=$OUT ./run_rootfs.sh"
+D="$N/private/preboot/Cryptexes/OS"; mkdir -p "$D"; ditto "$C" "$D"
+df -h "$N" | tail -1
+ls -la "$D/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e" 2>/dev/null
+sync
+echo "[OK] $OUT   ->   ROOTFS=$OUT ./run_rootfs.sh"

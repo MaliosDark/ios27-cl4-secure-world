@@ -943,3 +943,23 @@ So the cache is present but its cdhash is not in any loaded trust cache. Next: l
 cryptex trust cache (094-13150-145.dmg.aea.trustcache) so AMFI trusts the cache cdhash,
 by merging its cdhashes into firmware/all_hashes and rebuilding ramdisk.tc, or teaching
 darwin-vm to load a second -tc. (Fallback: AMFI boot-args / kernelcache patch.)
+
+## UPDATE 31 - Trust cache merge fixes AMFI signature; shared-region map now ENOMEM
+Merged the cryptex trust cache (094-13150-145.dmg.aea.trustcache, 130 sha256 cdhashes,
+IM4P/trcs v2) into firmware/all_hashes (475 -> 602) and rebuilt ramdisk.tc via
+build_tc.py (hashType=2). Booted.
+Result: the AMFI rejection is GONE. Before: "adhoc signed / unsuitable CT policy 0,
+rejecting signature / code signature registration for shared cache failed". Now dyld
+gets PAST the signature and fails one step later:
+  dyld[1]: result from check_np(): -1, errno 12   (ENOMEM)
+  dyld[1]: dyld cache not loaded: syscall to map cache into shared region failed
+So AMFI now trusts the cache cdhash; the remaining wall is shared_region_map_and_slide
+returning ENOMEM. Not a general-RAM issue (ramdisk 16GiB sits in 24GiB dram, ~8GiB free;
+the cache is file-backed from md0 so mapping adds no bulk physical). Likely a
+shared-region VA-size / per-map limit / SPTM-typed-page constraint specific to this XNU
+boot, or the DeveloperOS cache layout. Next investigation: shared_region_map_and_slide_np
+path in the kernelcache, the arm64e shared-region reserved VA size, and whether SPTM
+gates the shared-region mapping of an adhoc cache.
+Milestones so far this arc: bare-APFS+System-role image -> root MOUNTS; launchd runs;
+dyld FINDS the injected cache; trust cache -> AMFI ACCEPTS the cache signature. Wall:
+shared-region map ENOMEM.

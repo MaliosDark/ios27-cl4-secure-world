@@ -963,3 +963,25 @@ gates the shared-region mapping of an adhoc cache.
 Milestones so far this arc: bare-APFS+System-role image -> root MOUNTS; launchd runs;
 dyld FINDS the injected cache; trust cache -> AMFI ACCEPTS the cache signature. Wall:
 shared-region map ENOMEM.
+
+## UPDATE 32 - shared-region map ENOMEM: not RAM, not compression; a never-exercised path
+Ruled out: (1) not general RAM (30GiB dram, same ENOMEM); (2) not APFS compression (cache
+files stored uncompressed, no decmpfs, blocks==logical); (3) not a kernel/cache build
+mismatch (IPSW ships only kernelcache.release + .research; release is the correct pairing).
+Cache facts (ipsw dyld info): Shared Region 5GB VA 0x180000000->0x2FCDD8000, 77 subcaches,
+4691 images, max slide 0x20000000.
+Key realization: the restore ramdisk (Boot A, the bash-5.3# shell) has NO dyld_shared_cache
+- its bash links /usr/lib/libSystem.B.dylib as INDIVIDUAL files. So darwin-vm's
+shared-region cache-mapping path has NEVER been exercised until this full-OS boot. Our boot
+is the first to call shared_region_map_and_slide, and it returns ENOMEM.
+Most likely cause: SPTM page-table pool / vm_shared_region resource shortage when mapping a
+5GB shared region under SPTM (a path the minimal restore-ramdisk boot never hits). Needs
+kernelcache RE of vm_shared_region_map_file (strings ref vm_shared_region.c) and/or an
+SPTM-level change. Kernelcache is a bare arm64e Mach-O, unstripped-symbols absent.
+Alt path (if map stays unsolved): extract individual dylibs from the cache into the rootfs
+so dyld runs disk-mode like the restore ramdisk - but that is ~4691 images and dyld would
+still prefer the cache; impractical for a full boot.
+HARD CEILING beyond this: even once userspace runs, the iOS home-screen GUI (SpringBoard)
+needs the AGX GPU, which is NOT emulated. The rendered "screen" that works today is the DCP
+panel showing the live boot; a real SpringBoard render requires a GPU model (huge separate
+effort).

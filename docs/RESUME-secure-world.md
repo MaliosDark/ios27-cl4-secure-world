@@ -1028,3 +1028,27 @@ NEXT: cache path via lldb over qemu gdbstub (darwin-vm supports -s -S; used befo
 permanent occupant of [0x180000000, 0x31CDD8000], then either relocate/free it or adjust.
 GPU note: SpringBoard needs no AGX emulation - iOS software-renders into the framebuffer we
 already scan out (QEMUAppleSilicon/Inferno proves this for iOS14). The gate is userspace.
+
+## UPDATE 35 - Cache-map failure is murky: kernel-VM vs cryptex-registration (Image4/nonce)
+Two lldb traces gave CONTRADICTORY results, so no patch was fabricated:
+- Trace 1: sr_map holds one whole-span reservation [0x180000000,0xfc0000000) (nentries=1,
+  object=0) that the cache regions collide with -> KERN_NO_SPACE. Suggested OVERWRITE patch.
+- Trace 2 (same agent, resumed): the whole-span vm_map_enter SUCCEEDS (return 0 at 7 stack
+  levels), NO per-region enters follow, and dyld's cache path is literally "(null)" -> dyld
+  never got a cache to map. Points instead at CRYPTEX REGISTRATION.
+Ground truth (serial, certain):
+  dyld: check_np()=-1 errno 12; "dyld cache '(null)' not loaded: syscall to map cache into
+  shared region failed"; AppleImage4: magazine[cptx]: failed to read nonce slot data: 2;
+  apfs_vfsop_mount: Need authenticator (81); failed to get root-snapshot-name.
+New leading hypothesis: iOS mounts cryptexes as SEALED, Image4/nonce-REGISTERED DMG volumes
+(cryptexd + SEP-backed nonce), not loose files. inject_cryptex.sh places the cache CONTENTS
+as files at /private/preboot/Cryptexes/OS but does NOT create a registered cryptex, so the
+kernel/dyld shared-cache mapping (which validates the cache is on a registered cryptex)
+refuses it -> "(null)"/map failed. This aligns with the serial Image4 nonce failures.
+Faking cryptex registration in-VM likely needs the Image4/nonce/authenticator chain (SEP-
+backed) -> very hard, possibly infeasible without SEP emulation.
+STATUS OF PATHS: disk-mode DEAD (cache-extracted dylibs unloadable: __got/__auth_stubs/
+__const offset=0). cache-map path blocked by (kernel-VM OR cryptex-registration) - both deep.
+Achieved this arc: root mounts, launchd execs, dyld disk-loads (disk-mode), AMFI accepts the
+cache signature (trust cache). GPU is NOT the blocker (software render path exists); the gate
+is getting the dyld cache actually mapped, which is gated by cryptex registration/Image4.

@@ -985,3 +985,20 @@ HARD CEILING beyond this: even once userspace runs, the iOS home-screen GUI (Spr
 needs the AGX GPU, which is NOT emulated. The rendered "screen" that works today is the DCP
 panel showing the live boot; a real SpringBoard render requires a GPU model (huge separate
 effort).
+
+## UPDATE 33 - shared_region ENOMEM = KERN_NO_SPACE; environmental (H1 VA geometry / H2 SPTM carveout)
+RE of bootkc.md0 (subagent): file<->VA linear fileoff = VA - 0xfffffff007004000.
+errno 12 is KERN_NO_SPACE(3), from the syscall kr->errno switch at VA 0xfffffff00b0bc410
+(3 -> ENOMEM at 0xb0bc45c). Functions: _shared_region_map_and_slide @0xb0bc294;
+vm_shared_region_map_file (A) @0xac0d9b8; ..._setup (B) @0xac0e61c (sr_map=[sr+0x28],
+sr_base=[sr+0x40]); per-mapping worker (C) @0xac0f10c; vm_shared_region_create @0xac0fda0
+(sr_base=0x180000000 @0xac10200; submap vm_map_create @0xac109d4/0xac109f4; validates up to
+base+0x400000000=16GB @0xac10490/0xac10624). Cache needs fixed maps 0x180000000->0x2FCDD8000
+(~5.95GB), up to ~0x31CDD8000 with slide. KERN_NO_SPACE = sr_map can't admit that top.
+In-image constants are adequate AND the same KC maps this cache on real HW -> the shrink is
+ENVIRONMENTAL. H1 (most likely, config): sr_map max_offset reduced due to wrong chip
+identity / page size / clamped user-VA ceiling (max_offset is register-computed, not a
+patchable immediate). H2 (not KC-patchable): SPTM/TXM page-table carveout too small for a
+~6.5GB nested pmap (enlarge via device tree). check_np also returned errno 12 (leans H2 a
+bit). Discriminator: correct chip-id/page/VA and boot once. Do NOT patch the kr==3->ENOMEM
+xlate (only changes the printed errno).

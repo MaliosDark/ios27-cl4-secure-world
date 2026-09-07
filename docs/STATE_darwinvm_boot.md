@@ -509,3 +509,31 @@ inspect sr fields; find the create/init that populates +0x18. This is a VM-inter
 - rootfs_with_cryptex.dmg: cache RE-SIGNED (maxSlide=0 @0xf0, slot0=fbc10976..., cdhash 46ac4561..)
 - firmware/ramdisk.tc: rebuilt with new cache cdhash 46ac4561...; old f6d6c131 removed
 - firmware/all_hashes.pre_resign, ramdisk.tc.pre_resign = backups before re-sign
+
+## Wall #2 localized to the exact trigger 2026-09-08 (lldb)
+The cache-map syscall handler (0xb0bc1bc) calls vm_shared_region_map_and_slide_setup
+(0xb0bc700) BEFORE vm_shared_region_map_file. That setup returns kr=1 and the syscall fails.
+Findings from live lldb (re-signed cache, so preflight passes):
+- shared region is fine: base 0x180000000, size 0xe40000000 (57 GB) -> the cache (5.9 GB)
+  fits trivially. sr+0x18 NULL is normal (nothing mapped yet). arg7 == global @0xb6c01b0.
+  So NOT a fit/slide/arg problem.
+- setup args: x0=sr-ish, x1=0x4f(79), x2=ptr, x3=0x65(101)=kr init, x4=ptr, x5/x6=out.
+- The mapping loop runs ONE iteration; both map calls succeed:
+    0xb31e2dc(x0,x1,prot=7,flags=0x12) -> w0=0   (vm_map_enter-like)
+    0xacfa218(entry, &mapinfo@sp+0xb0, x28)  -> w0=0   (map-entry info thunk)
+- BUT the map-info struct @sp+0xb0 comes back with +0x40 = 0x6300100000, i.e. the u32 at
+  +0x44 ([sp+0xf4]) = 0x63 (99). The check at 0xb0bd118 `ldr w8,[sp+0xf4]; cbnz w8,0xb0bd8a8`
+  then branches to the error path 0xb0bd8a8, which does address-range predicates (0xb0b9c3c)
+  and unconditionally reaches `mov w25,#1` (0xb0bd91c / 0xb0be398) -> kr=1 -> syscall fails.
+So Wall #2 == a non-zero property/flag (0x63) in the mapping-info at struct+0x44 makes the
+setup take a kr=1 path. The map itself succeeds; this is a post-map property check.
+
+## NEXT for Wall #2
+Determine what struct+0x44 (=0x63) is and why it is non-zero here (it should be 0 for the
+success path 0xb0bcf5c). Candidates: an unsupported mapping property / auth-or-slide
+requirement for the arm64e cache mapping that this SEP-less VM config does not satisfy (ties
+to the old auth_remap note). Break 0xacfa218's callee (thunk -> 0xacfa3e8 slow path) to see
+where +0x40/+0x44 is written, and decode 0x6300100000. If it is a benign property the check
+over-rejects in-VM, the fix is a targeted kernel patch at 0xb0bd118 (skip the 0xb0bd8a8 path)
+or in 0xacfa218's callee; if it reflects a real unmet requirement, that requirement must be
+provided. This is the true, precise Wall #2 frontier.

@@ -14,7 +14,9 @@ qemu-sptm on an Intel Mac. Goal: reach SpringBoard.
 - [x] APFS root mounts (RaveSeedD47OS), launchd (PID 1) execs
 - [x] dyld shared cache MAPS           (maxSlide=0; Wall #2 crossed)
 - [x] libSystem loads (no more "Library not loaded")
-- [ ] launchd survives  <-- CURRENT WALL: dyld mapSplitCacheSystemWide bad-ptr fault (see DEFINITIVE ROOT CAUSE below); NOT code-signing
+- [x] launchd survives + dyld cache MAPS + full userspace (bootkc.md0.nopf4; Wall #2 crossed)
+- [ ] daemons launch  <-- WALL #3: rootfs file ownership is uid 501, launchd rejects (error 122)
+- [ ] SpringBoard
 
 ## Current wall (CONFIRMED root cause) -- REFRAMED 2026-09-07
 NOTE: check_np's errno 12 is NORMAL (dyld's pre-map call; region legitimately
@@ -537,3 +539,37 @@ where +0x40/+0x44 is written, and decode 0x6300100000. If it is a benign propert
 over-rejects in-VM, the fix is a targeted kernel patch at 0xb0bd118 (skip the 0xb0bd8a8 path)
 or in 0xacfa218's callee; if it reflects a real unmet requirement, that requirement must be
 provided. This is the true, precise Wall #2 frontier.
+
+## ####### WALL #2 CROSSED 2026-09-08 -- launchd runs full userspace #######
+Fix: NOP the over-rejecting map-info check. At 0xfffffff00b0bd11c the setup does
+`ldr w8,[sp+0xf4]; cbnz w8,0xb0bd8a8` and takes a kr=1 path when the mapping-info field
+struct+0x44 (=0x63 in-VM) is non-zero. That 0x63 property is benign for our purposes (the
+map itself succeeds), so NOP the cbnz (0xd503201f) -> the setup completes -> kr=0 -> the dyld
+cache MAPS. Built bootkc.md0.nopf4 (bootkc.md0.patched + this 1-insn NOP) and booted it.
+RESULT: the dyld cache maps, libSystem loads, and launchd (PID 1) runs as full com.apple.xpc
+.launchd: it does the boot-task sequence (exclaves-boot, commit-boot-mode, restore-datapartition
+init-with-data-volume, fixup-mobile-tmp ...) and tries to launch backboardd, SpringBoard,
+watchdogd and dozens of LaunchDaemons. 2000+ lines of userspace launchd log. This is the first
+time iOS 27 userspace runs under darwin-vm.
+
+## NEW WALL #3 -- file ownership/permissions (mundane, userspace)
+launchd refuses every LaunchDaemon:
+  (user/501/com.apple.SpringBoard) <Error>: Caller specified a plist with bad ownership/
+  permissions: path = /System/Library/LaunchDaemons/com.apple.SpringBoard.plist, caller=launchd[1]
+  Failed to bootstrap path: ... error = 122: Path had bad ownership/permissions
+Cause: rootfs_with_cryptex.dmg was built on macOS, so files are owned by uid 501 (the build
+user) instead of root:wheel(0:0). launchd (correctly) rejects daemon plists not owned by root.
+Also seen: "/private/var/mobile/tmp: Read-only file system" (rootfs is read-only md0; expected).
+FIX OPTIONS for Wall #3:
+1. Re-own the rootfs to root:wheel: mount the dmg rw and `sudo chown -R 0:0` (root) the
+   System/Library/LaunchDaemons (and ideally the whole tree), fix modes (plists 0644). Big but
+   straightforward. Best/cleanest.
+2. Make the guest ignore ownership (a mount/volume flag) -- less certain in-VM.
+3. Patch launchd's ownership check (launchd is trust-cached; editing it changes its cdhash ->
+   would need a tc update like the cache re-sign). Avoid if #1 works.
+Do #1: chown the rootfs to root. Then SpringBoard should launch (GPU is software-rendered into
+the DCP framebuffer per the frontier notes).
+
+## Artifacts
+- firmware/bootkc.md0.nopf4 = bootkc.md0.patched + NOP @0xb0bd11c (Wall #2 fix). Boot this.
+- Boot cmd: BOOTKC=firmware/bootkc.md0.nopf4 (or edit run_rootfs.sh).

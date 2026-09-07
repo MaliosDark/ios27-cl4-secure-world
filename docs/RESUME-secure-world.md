@@ -1002,3 +1002,29 @@ patchable immediate). H2 (not KC-patchable): SPTM/TXM page-table carveout too sm
 ~6.5GB nested pmap (enlarge via device tree). check_np also returned errno 12 (leans H2 a
 bit). Discriminator: correct chip-id/page/VA and boot once. Do NOT patch the kr==3->ENOMEM
 xlate (only changes the printed errno).
+
+## UPDATE 34 - Both paths mapped to fundamental walls; cache path is the only viable one
+CACHE PATH (map whole cache into shared region): the KERN_NO_SPACE is generic-VM, kernel-
+patchable (NOT SPTM) - subagent traced it to the FIXED vm_map_enter overlap checker
+0xabd0368 (returns 3 at 0xabd03b0/0xabd0438) = case (i): the target VA range in sr_map is
+already OCCUPIED. sr_map size is fine (57GiB table entry). Applied VM_FLAGS_OVERWRITE patch
+(fileoff 0x3c0b7ec mov x12,#0->movz x12,#0x4000 [worker C]; 0x3c0aae0 & 0x3c0ab00 [setup B]).
+Result: STILL KERN_NO_SPACE -> the occupant is a permanent/nested/immutable entry that the
+overwrite (vm_map_delete) path won't remove. Occupant identity unknown (needs runtime).
+DISK-MODE PATH (loose dylibs, no cache, like the restore ramdisk): got MUCH further - root
+mounts, launchd execs, dyld loads FROM DISK (no cache/shared-region/SPTM at all). Two sub-
+walls found and fixed in sequence: (1) signal 9 SIGKILL = code-signing; ~705 Mach-Os were
+unsigned (my name-based find missed .videoencoder/.videodecoder/etc AND clobbered /usr/lib/
+dyld). Fixed: sign ALL 4691 Mach-Os by magic + full trust cache + keep rootfs's real dyld.
+(2) Then dyld rejects the dylibs themselves: "section __TEXT/__auth_stubs has offset=0 but
+is not a zero-fill section type". This is FUNDAMENTAL: cache-extracted dylibs (ipsw AND
+Apple's /usr/lib/dsc_extractor.bundle both) leave coalesced sections (__got/__auth_stubs/
+__const/__auth_ptr) with offset=0 and lost content. The dyld shared cache is not meant to be
+de-cached into standalone loadable dylibs. Disk-mode is DEAD.
+Boot-arg cs_enforcement_disable=1 -> kernel panics "can't has cs_enforcement_disable"
+@AppleMobileFileIntegrity.cpp:5710 (release AMFI refuses it).
+NEXT: cache path via lldb over qemu gdbstub (darwin-vm supports -s -S; used before per
+/tmp/lldb12.log) - break at the shared-region vm_map_enter, walk sr_map to identify the
+permanent occupant of [0x180000000, 0x31CDD8000], then either relocate/free it or adjust.
+GPU note: SpringBoard needs no AGX emulation - iOS software-renders into the framebuffer we
+already scan out (QEMUAppleSilicon/Inferno proves this for iOS14). The gate is userspace.

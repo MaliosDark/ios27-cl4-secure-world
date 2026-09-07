@@ -896,3 +896,29 @@ So once md0 mounts root, the full OS has a path to userspace via the static trus
 with the cs_enforcement bypass boot-args as a fallback if AMFI rejects rootfs binaries.
 Full OS currently boots (dram-size fix) through SPTM/XNU to APFS mountroot on the lit
 panel; md0 >4GB is the immediate blocker.
+
+## UPDATE 29 — md0 fix WORKS: real iOS root MOUNTS; next = dyld cache (Cryptex)
+Applied the md0-size agent's fix: 6 w->x widenings in XNU's md-device driver (the
+mdSize<<12 page->byte computations) -> firmware/bootkc.md0 (12 bytes differ, verified).
+Boot: bootkc.md0 + dtree_ios + rootfs 094-13182-141.dmg + -m 20G:
+  -> the "container size > device size" truncation is GONE. THE REAL iOS ROOT MOUNTS
+     (BSD root: md0; apfs mountroot; 311 serial lines) and /sbin/launchd (the rootfs's
+     own launchd) STARTS.
+  -> New panic: launchd[1] fatal signal 6 -- "Library not loaded: /usr/lib/libSystem.B
+     .dylib ... no such file, no dyld cache". The rootfs (094-13182-141) is the SystemOS
+     and does NOT contain the dyld_shared_cache or the regular libSystem.B.dylib (only
+     libSystem_asan.dylib). iOS 27 keeps the dyld shared cache + system libraries in the
+     Cryptex1,SystemOS (094-13150-145.dmg.aea, ~2.3GB) which is NOT present locally (only
+     the rootfs 094-13182-141 and ExclaveOS 094-14052-182 are). So the next dependency is
+     the Cryptex: it must be obtained/decrypted (user's part per ChefKiss) and mounted
+     alongside the rootfs so dyld finds the shared cache. (Also: a nested crash A / DCP
+     MMIO SEA still appears -> the DARWIN_DISP=dcp0-expert fix from the appledcp-crashA
+     agent is the display-side fix for later.)
+Milestone: the FULL iOS 27 now boots through SPTM/XNU, mounts its REAL root filesystem,
+and launches launchd -- blocked only on the missing Cryptex dyld cache.
+crash A agent result: the garbage callback is base-XNU sleh.c's hwerr decoder OVERRUNNING
+a const table (0xfffffff007de2338) after a SYNCHRONOUS EXTERNAL ABORT -- AppleDCP touched
+unbacked MMIO. Fix = back the MMIO: DARWIN_DISP=dcp0-expert (init_display_stub, NOT the
+dart-* nodes). Then SEA gone -> CPU_CONTROL RUN -> [dcp] AFK INIT. Then apple_dcp.c
+RBEP_RECV: read TX ring @bfr_dva, decode swap_submit EPIC {iova,stride,w,h,fmt}, blit to
+fb_base. Details in experiments/appledcp-crashA/README.md.

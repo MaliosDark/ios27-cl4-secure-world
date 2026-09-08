@@ -573,3 +573,14 @@ the DCP framebuffer per the frontier notes).
 ## Artifacts
 - firmware/bootkc.md0.nopf4 = bootkc.md0.patched + NOP @0xb0bd11c (Wall #2 fix). Boot this.
 - Boot cmd: BOOTKC=firmware/bootkc.md0.nopf4 (or edit run_rootfs.sh).
+
+## IMPORTANT -- correct boot command (do not let run_rootfs.sh auto-pick)
+run_rootfs.sh auto-selects the first >1G dmg in darwin-vm/rootfs/ (currently
+094-13182-141.dmg, the UNfixed/UNchowned DeveloperOS image) when ROOTFS is unset. The
+fixed+chowned image is firmware/rootfs_with_cryptex.dmg. ALWAYS boot with both set:
+  cd /Users/maliosdark/darwin-vm
+  BOOTKC=firmware/bootkc.md0.nopf4 ROOTFS=firmware/rootfs_with_cryptex.dmg ./run_rootfs.sh
+Using the wrong dmg reproduces "dyld cache not loaded" + a nested PC-alignment panic (the
+launchd-death panic handler), NOT our progress. The working combo that reached full userspace:
+bootkc.md0.nopf4 + rootfs_with_cryptex.dmg (cache maxSlide=0x20000000 valid Apple sig; the
+nopf4 kernel NOP skips the over-rejecting map-info check so the cache still maps).

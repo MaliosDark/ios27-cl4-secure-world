@@ -1044,3 +1044,45 @@ in the rootfs; there is NO shell (only /sbin/mount), so daemons can exec one bin
   in this VM.)
 - qemu-sptm/target/arm/helper.c: DARWIN_TRAPLOG EL0 BRK/UDEF logger (env-gated), for catching any
   future userspace abort and symbolicating it (slide=0; ipsw dyld a2s on the Cryptex main cache).
+
+## 2026-09-08 (cont.) -- kernel-patch RE: APFS RO-mount functions LOCATED (ipsw fixup-aware disasm)
+Proven first: SpringBoard is the FIRST daemon to reach "running" (~31s), before every infra daemon
+(34-46s). So NO userspace mount daemon can run before SpringBoard's crash -- the kernel patch is
+the ONLY fix (not a preference). Host APFS role-change refused (-69599); runtime `mount -uw /`
+refused ("r/w update not allowed" for the System-role volume). Volume RaveSeedD47OS = APFS role
+System, Sealed:No -> APFS mounts it RO (ROSV) at root.
+
+### Tooling that WORKS (use this, not a raw capstone scan)
+APFS log format strings are referenced via fixup-indirected adrp+add that a naive capstone scan
+misses. ipsw's analyzer resolves them:
+  ipsw macho disass firmware/bootkc.md0.nopf4 -t com.apple.filesystems.apfs \
+      -x __TEXT_EXEC.__text --force  > /tmp/apfs_disasm.txt
+(one full analysis pass ~2-3 min; then grep the annotated output for the string). Static VA base
+0xfffffff008400000; runtime = static + 0x20000000. bootkc is a fileset kernelcache (xnu-13432.2.10
+T8140); the big __TEXT_EXEC is VA 0xfffffff008400000 / file off 0x13fc000 / size 0x2f54000.
+
+### Located addresses (static VA)
+- container_rootmount: prologue 0xfffffff00a89a870; logs "boot from ramdisk %s" at 0xfffffff00a89a908;
+  calls the container mount at 0xfffffff00a88c6a8 with w3=0 (flags arg) right after.
+- ROSV RO/shadow-root handler (apfs_vfsop_mount region): logs "ROSV: apfs mounted RO and is the
+  system volume of a volume group ... creating the shadow fs_root" at 0xfffffff00a8e09f8; function
+  return epilogue ~0xfffffff00a8e09a8-9c8 (retab). Manipulates a mount-flags field at [x19+0x128]
+  (clears bit 0x10000, sets 0x40 at 0xfffffff00a8e07f4). Gate at 0xfffffff00a8e08b4:
+  ldr x8,[x19,#0xd0]; ldrb w8,[x8,#0x17a]; tbz w8,#0 -> skip ROSV-RO path (candidate: the [obj+0x17a]
+  bit 0 is the "volume RO" flag that drives the ROSV path).
+- Feature-forced RO (NOT our path): "unsupported apfs_readonly_compatible_features: mount r/o" at
+  0xfffffff00a9388c4; "unsupported nx_readonly_compatible_features ... r/w update not allowed" at
+  0xfffffff00a88d84c; "non writable nx dev: r/w update not allowed" at 0xfffffff00a88d8b8. Per grok,
+  the "r/w update not allowed" paths are a DIFFERENT branch (nx not writable); patching them does
+  NOT mount root RW -- do not target them.
+
+### NEXT (pinpoint + patch, then boot-test ~135s)
+Find the exact instruction that sets MNT_RDONLY / marks the root mount RO for the System-role md0
+volume and neutralize it so / mounts RW at boot (initial rw mount is allowed; only r/w UPDATE is
+refused). Two candidate sites: (a) XNU-side root mount flag (simpler if it exists -- disasm
+com.apple.kernel __TEXT_EXEC and find vfs_mountroot/imageboot forcing MNT_RDONLY for md0), or
+(b) the APFS ROSV gate at 0xfffffff00a8e08b4 (force the [obj+0x17a] bit-0 branch so it does not take
+the RO/shadow path) -- but validate this does not skip required mount setup. Prefer (a). Decompile
+the mount fn (ipsw -D) or map the struct-mount mnt_flag offset to be certain before patching; a
+wrong kernel patch breaks the boot. Do NOT patch BSUIMappedImageCache (grok): once /private/var +
+/tmp are RW, SpringBoard stops the brk and should survive BaseBoardUI init.

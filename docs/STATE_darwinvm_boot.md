@@ -997,3 +997,50 @@ races nothing. Fallbacks if APFS still refuses: a separate writable data image m
 kernel patch is preferred.
 Note: the DCP/display is NOT on this critical path; it is deferred until SpringBoard survives its
 BaseBoardUI init.
+
+## 2026-09-08 (cont.) -- writable-/var: host + runtime routes exhausted; kernel patch is next
+Pinned WHY the rootfs is read-only and ruled out the easy routes:
+- The RaveSeedD47OS volume has APFS role = System (Sealed: No). APFS mounts a System-role volume
+  READ-ONLY at root (ROSV: "apfs mounted RO and is the system volume of a volume group: creating
+  the shadow fs_root"). Confirmed via `diskutil info` (Role: System) and the APFS cstrings in
+  bootkc.
+- HOST role change refused: `diskutil apfs changeVolumeRole disk11s1 D|C` -> error -69599. macOS
+  will not reassign the System role on this single-volume container. So we cannot make it a Data
+  volume host-side.
+- RUNTIME `mount -uw /` refused: it is an r/w UPDATE of a System/sealed volume; APFS strings say
+  "non writable nx dev: r/w update not allowed" and "authentication is allowed only on readonly
+  mounts". Even when the hijacked daemon (bootps.plist -> com.apple.vphone.rootrw, system domain)
+  execs `/sbin/mount -uw /`, a SpringBoard respawn AFTER it still crashes -> the remount does not
+  take. Plus launchd only brings an ordinary daemon up ~52s (speculative), after SpringBoard has
+  already crash-looped out at ~46s. Timing is unwinnable from userspace.
+
+### The fix: KERNEL patch to mount the md0 root READ-WRITE at boot (initial mount, not an update)
+An INITIAL rw mount is allowed (that is how APFS Data volumes mount); only the r/w UPDATE is
+refused. So patch the boot-time root mount so APFS does not force RO for this volume. Candidate
+sites in the APFS kext (fileset entry com.apple.filesystems.apfs; __TEXT_EXEC.__text base VA
+0xfffffff00a843a50, runtime = static + 0x20000000): the ROSV RO-decision (format string VA
+0xfffffff007d52e81), apfs_mountroot (str 0xfffffff007d546a3), and the RO-forcing branches for
+"unsupported *_readonly_compatible_features -> mount r/o" (0xfffffff007d5fcd9) / "r/w update not
+allowed" (0xfffffff007d6f486). Surgical goal: clear MNT_RDONLY / skip the System-volume RO forcing
+for the root mount so / mounts rw.
+TOOLING NOTE for next session: a naive capstone adrp+add xref scan of the APFS __text found NO
+direct refs to these format strings -- APFS uses os_log-style indirect string refs (pointer via
+__DATA_CONST / a logging helper), so use ipsw's analyzer (`ipsw kernel disass --fileset-entry
+com.apple.filesystems.apfs`) or a proper xref pass, not a quick adrp+add scan. Note the APFS
+__text as reported by ipsw starts with a small data table (decodes as udf); real code begins a bit
+later (valid prologues seen ~file 0x3840000).
+
+### Alternative if the kernel patch is hard: tmpfs over /private/var/folders
+/private/var/folders EXISTS (empty) and is dirhelper's base = BSUIMappedImageCache's PRIMARY
+tmpDir. A fresh `mount_tmpfs` there is a NEW mount (not an r/w update, so NOT refused) and needs no
+mkdir (mountpoint exists). It still needs an EARLY root exec (same launchd timing problem), so it
+is only viable if paired with an early-demanded daemon or a kernel/boot hook. mount_tmpfs exists
+in the rootfs; there is NO shell (only /sbin/mount), so daemons can exec one binary each.
+
+### Reusable assets left in place
+- rootfs dmg: /System/Library/LaunchDaemons/bootps.plist is hijacked into com.apple.vphone.rootrw
+  (`/sbin/mount -uw /`, RunAtLoad, LimitLoadToSessionType=System). Harmless; part of the eventual
+  fix once a working writable-/var mechanism lands. (Original bootpd DHCP server is disabled -- fine
+  in this VM.)
+- qemu-sptm/target/arm/helper.c: DARWIN_TRAPLOG EL0 BRK/UDEF logger (env-gated), for catching any
+  future userspace abort and symbolicating it (slide=0; ipsw dyld a2s on the Cryptex main cache).

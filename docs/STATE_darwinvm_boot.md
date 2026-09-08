@@ -761,3 +761,39 @@ SPTM->XNU->secure world -> Image4/SSV/root mount -> launchd -> dyld cache maps -
 hundreds of daemons run 30-46s (backboardd, usermanagerd, CommCenter, wifid, locationd, ...),
 SpringBoard runs ~18s. Blocked only by the unimplemented DCP/IOMFB display RPC. Winning boot:
 DARWIN_NOPAC=1 + bootkc.md0.nopf4 + txm.sc + rootfs_with_cryptex.dmg (root-owned).
+
+## ############## 2026-09-08 (late) -- SpringBoard SIGTRAP root is the DISPLAY (DCP), not IOMFB RPC ##############
+Instrumented the DCP (qemu-sptm/hw/arm/apple_dcp.c) and re-ran. Findings overturn the IOMFB-RPC
+theory:
+- The guest sends the DCP endpoints (0x23/0x24/0x25) ZERO messages -- no AFK INIT/GETBUF/RECV --
+  in both 640x1136 and the new 1179x2556 builds. So IOMFB never flows; my RBEP_RECV ring-dump
+  never fires. The IOMFB RPC was downstream of the real block.
+- The DCP RTKit coprocessor HANDSHAKE never even starts: no "[rtkit:dcp] CPU_CONTROL RUN", no
+  "boot -> HELLO" unless forced. The guest's RTBuddy(DCP) driver prints "RTBuddy(DCP): start"
+  but never writes the DCP ASC mailbox (CPU_CONTROL/A2I) at all.
+- Forcing it via DARWIN_RTKIT_ANNOUNCE=N makes our side send HELLO(min=11,max=12), but the guest
+  never reads I2A_RECV / never replies (no HELLO_REPLY -> no EPMAP -> no endpoints -> no AFK).
+  Tried N=5 (too early, RTBuddy loads ~14s) and N=20 (guest still silent).
+=> The display coprocessor never comes up, so backboardd/SpringBoard get no display surface, and
+SpringBoard asserts (SIGTRAP) after ~18s. 3 crashes -> launchd reboot -> Halt/Restart panic.
+
+## Real remaining work: bring up the DCP display coprocessor for iOS 27 (substantial)
+The darwin-vm DCP is a minimal stub: it registers the AFK endpoints and CPU-paints a bring-up
+console to the loader framebuffer, but the guest's iOS 27 AppleDCP/RTBuddy stack does not engage
+it. To get SpringBoard to render:
+1. Find why RTBuddy(DCP) never touches the DCP ASC mailbox (power-domain/PMGR gate? firmware-load
+   handshake it waits on? IRQ (AIC) not delivered so it never sees our I2A HELLO? register window
+   mismatch?). Instrument guest MMIO to the dcp reg window + the DCP AIC IRQ.
+2. Complete the RTKit(DCP) mgmt handshake (HELLO<->HELLO_REPLY, EPMAP, STARTEP) so the guest opens
+   the endpoints.
+3. Then AFK transport + the IOMFB RPC (display-info/timings, IOSurface registration, swap ->
+   swap-complete + vsync). Ref: Asahi drivers/gpu/drm/apple (afk.c, dcp, iomfb*), and
+   QEMUAppleSilicon/ChefKiss DCP work.
+This is a real emulation project (hundreds of lines), the genuine final piece.
+
+## qemu-sptm changes made this session (in darwin-vm/qemu-sptm/hw/arm/, that repo -- not here)
+- darwin.c: DARWIN_FB_WIDTH/HEIGHT 640x1136 -> 1179x2556 (iPhone17,3 native; user request).
+- apple_dcp.c: on-panel console strings translated ES->EN (STAGE_NAME, panic/console labels);
+  RBEP_RECV now hexdumps the AFK TX ring (foothold for the IOMFB RPC once the handshake works).
+- Winning userspace boot (display still absent): DARWIN_NOPAC=1 [+ DARWIN_RTKIT_ANNOUNCE=N] +
+  bootkc.md0.nopf4 + txm.sc + rootfs_with_cryptex.dmg (root-owned).

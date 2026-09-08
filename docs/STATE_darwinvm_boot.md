@@ -727,3 +727,37 @@ either an lldb catch of SpringBoard's userspace trap or extracting its crash rep
 - bootkc.md0.nopf4  Wall #2 fix kernel.
 - rootfs_with_cryptex.dmg  valid cache (maxSlide reverted) + re-owned to root.
 - Boot env: DARWIN_NOPAC=1.
+
+## ############# FINAL DIAGNOSIS 2026-09-08 -- SpringBoard SIGTRAP = DCP/IOMFB RPC is a stub #############
+Root of SpringBoard's ~18s SIGTRAP (confirmed by reading qemu-sptm/hw/arm/apple_dcp.c, 378 lines):
+the emulated DCP does the AFK transport handshake (INIT/GETBUF/RECV) and paints a static
+"bring-up" test frame straight to the loader framebuffer, but it does NOT implement the IOMFB
+RPC. On RBEP_RECV (guest posted an IOMFB message) it only prints "guest posted an IOMFB message"
+and returns -- it never reads the TX ring, never decodes the IOMFB method, never posts a reply.
+So backboardd/SpringBoard's display bring-up RPCs (get display info/timings, register IOSurface,
+swap submit -> swap-complete callback, vsync/vblank) get NO replies. Their render setup blocks,
+and after ~18s SpringBoard asserts (SIGTRAP). 3 crashes -> launchd "rebooting due to critical
+process crashes: SpringBoard" -> Halt/Restart panic (VM has no reset).
+
+So the earlier "we don't need to emulate wifi/speakers/etc. for SpringBoard" holds -- but we DO
+need the DISPLAY (DCP/IOMFB) RPC, because SpringBoard actually drives the display and waits on it.
+
+## THE remaining work (development, well-scoped): implement the DCP/IOMFB RPC in apple_dcp.c
+On RBEP_RECV: read the guest's message from the AFK TX ring in shared memory (ring at s->bfr_dva),
+decode the IOMFB RPC (AFK framing + IOMFB method id + args), and post the expected reply into the
+RX ring + signal the guest. Minimum method set to get SpringBoard rendering:
+- get display / mode / timings (dimensions 640x1136, refresh) so CoreDisplay/backboardd configure.
+- surface registration (IOSurface / layer) so SpringBoard can hand over its framebuffer.
+- swap submit -> immediately post a swap-complete callback (and a periodic vsync/vblank) so the
+  CoreAnimation render loop advances instead of blocking.
+- brightness / power acks (already have a backlight stub).
+Reference for the AFK ring + IOMFB protocol: Asahi Linux drivers/gpu/drm/apple/ (afk.c, dcp,
+iomfb*). The darwin-vm author left RBEP_RECV as a foothold stub on purpose ("so the next stage
+has a foothold"). Once swaps complete, SpringBoard should scan out its real frames to the panel
+(software-rendered; no AGX needed) and the home screen should appear.
+
+## Where we are (summary)
+SPTM->XNU->secure world -> Image4/SSV/root mount -> launchd -> dyld cache maps -> full userspace:
+hundreds of daemons run 30-46s (backboardd, usermanagerd, CommCenter, wifid, locationd, ...),
+SpringBoard runs ~18s. Blocked only by the unimplemented DCP/IOMFB display RPC. Winning boot:
+DARWIN_NOPAC=1 + bootkc.md0.nopf4 + txm.sc + rootfs_with_cryptex.dmg (root-owned).

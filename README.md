@@ -26,7 +26,6 @@ and lighting the **DCP display panel** with the live boot log along the way.
 <p align="center">
   <img src="shots/panel-boot-polished.png" width="220" alt="Graphical boot screen on the DCP panel"/>
   <img src="shots/panel-root-shell.png" width="220" alt="Interactive root shell on the panel"/>
-  <img src="shots/full-os-root-mounted.png" width="220" alt="Full iOS root filesystem mounted"/>
 </p>
 
 > **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root**, and

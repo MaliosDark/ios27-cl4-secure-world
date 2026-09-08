@@ -797,3 +797,36 @@ This is a real emulation project (hundreds of lines), the genuine final piece.
   RBEP_RECV now hexdumps the AFK TX ring (foothold for the IOMFB RPC once the handshake works).
 - Winning userspace boot (display still absent): DARWIN_NOPAC=1 [+ DARWIN_RTKIT_ANNOUNCE=N] +
   bootkc.md0.nopf4 + txm.sc + rootfs_with_cryptex.dmg (root-owned).
+
+## 2026-09-08 -- DCP bring-up narrowed: RTBuddy(DCP) attaches but stays passive
+Instrumented the RTKit/DCP path and booted with io=0xffffff (IOKit verbose). Findings:
+- The device tree HAS the full display stack (all nodes register): disp0@0, dcp@2E00000 (main
+  DCP), dcp@2E00000/AppleASCWrapV6/iop-dcp-nub (RTBuddy attach point), dcpext@6E00000,
+  dart-disp0, dart-dcp/AppleT8110DART + mappers, DCPAVSACController. So matching data is present.
+- PMGR power domains are emulated (pmgr_write sets PS_ACTUAL=PS_TARGET instantly -> power-on does
+  NOT hang). So the block is not PMGR.
+- RTBuddy(DCP) ::start() runs (nub allocated, "RTBuddy(DCP): start" prints) but then touches the
+  DCP ASC mailbox window ZERO times -- no reads, no writes, no CPU_CONTROL RUN, and it does not
+  even poll I2A_CONTROL. rtkit_write logs unconditionally and rtkit_read logs after hello_sent;
+  both stay empty for dcp. So RTBuddy is fully passive after start.
+- Forcing our side to send HELLO (DARWIN_RTKIT_ANNOUNCE=5/18/20) delivers HELLO(min=11,max=12)
+  and raises the DCP AIC IRQ, but the guest never reads I2A_RECV -> no reply -> handshake dead.
+- io=0xffffff makes the boot crawl/hang at the IOKit registration phase (~447 lines); not usable.
+
+Interpretation: RTBuddy(DCP) is gated on a bring-up prerequisite BEFORE it will touch the mailbox
+-- most likely (a) it wants a DCP firmware image / an ASCWrap boot step it can't complete in the
+VM, or (b) the DCP AIC IRQ our HELLO raises is masked/not delivered because RTBuddy has not
+armed it yet (it arms it only during a bring-up it never starts). Either way the DCP IOP never
+boots -> no RTKit endpoints -> no AFK -> no IOMFB -> no display surface -> SpringBoard SIGTRAPs.
+
+## Concrete next steps for the DCP (the substantial final project)
+1. Trace WHY RTBuddy(DCP) stays passive: instrument guest MMIO to the whole dcp@2E00000 window
+   AND the AppleASCWrapV6 boot regs (not just the ASC mailbox offsets) + the DCP AIC IRQ
+   (mask/enable writes), to see what RTBuddy reads/waits on right after ::start. Consider a
+   moderate kext log mask (e.g. RTBuddy/ASCWrap debug) instead of io=0xffffff (which hangs).
+2. If it wants a DCP firmware/ASCWrap boot handshake, model the ASCWrap "boot" so RTBuddy
+   proceeds to CPU_CONTROL RUN and the RTKit HELLO exchange.
+3. Ensure the DCP I2A IRQ is actually delivered (AIC routing) so the guest sees our messages.
+4. Then RTKit mgmt handshake -> endpoints -> AFK -> IOMFB (display-info/surface/swap+vsync).
+This is a real multi-part emulation effort (the genuine final piece); userspace already boots
+fully (SpringBoard runs 18s) with DARWIN_NOPAC=1 + bootkc.md0.nopf4 + txm.sc + root-owned rootfs.

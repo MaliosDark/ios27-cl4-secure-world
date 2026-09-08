@@ -239,7 +239,7 @@ const C = {
   mbox:{name:"apple_dcp",sub:"emulated mailbox · QEMU",st:"partial",x:742,y:424,w:168,h:92,
     role:"Our emulation of the DCP coprocessor in QEMU: mailbox ASC + RTKit + AFK.",
     blurb:"ENABLED with DARWIN_RTKIT=1 - before it was asleep. The mailbox now responds.",
-    done:["Mailbox ASC 0x412e00000 alive","RTKit ep0 (HELLO/EPMAP) + AFK rings 0x23/0x24/0x25","640×1136 geometry, real fb connected"],
+    done:["Mailbox ASC 0x412e00000 alive","RTKit ep0 (HELLO/EPMAP) + AFK rings 0x23/0x24/0x25","1179x2556 geometry, real fb connected"],
     todo:["Map the AFK rings in memory (bfr_dva)","Implement the IOMFB/EPIC RPC (mode-set/surface/swap)"]},
   iomfb:{name:"IOMFB",sub:"IOMobileFramebuffer",st:"missing",x:742,y:540,w:168,h:56,
     role:"The layer that receives surfaces from the driver and sends them to the DCP to display them.",
@@ -248,11 +248,11 @@ const C = {
   dfb:{name:"DarwinFB",sub:"QEMU console",st:"ok",x:958,y:300,w:140,h:86,
     role:"The output framebuffer: a QEMU graphical console over real RAM.",
     blurb:"READY and waiting for pixels. When the DCP delivers a surface, it shows here.",
-    done:["fb 640×1136 allocated (DARWIN_FB=1)","boot_args.Video + /vram published","Graphical console created"],
+    done:["fb 1179x2556 allocated (DARWIN_FB=1)","boot_args.Video + /vram published","Graphical console created"],
     todo:["Receive the scanout from apple_dcp"]},
   screen:{name:"SCREEN",sub:"the goal",st:"phos",x:1140,y:150,w:112,h:396,
     role:"The iPhone screen. The goal of the whole device.",
-    blurb:"ON. Our DCP drives the panel and shows the REAL iOS 27 boot log (640×1136).",
+    blurb:"ON. Our DCP drives the panel and shows the REAL iOS 27 boot log (1179x2556).",
     done:["Panel driven by the emulated DCP","Full DCP to framebuffer to console scanout","Real iOS log rendered on the panel"],
     todo:["For the graphical iOS UI: IOMFB surfaces from the full OS (not ramdisk)"]},
 
@@ -280,7 +280,28 @@ const C = {
     role:"Kernel patch to mount the md0 root read-write at boot, so /private/var is writable.",
     blurb:"Confirmed XNU sets MNT_RDONLY, not APFS. Clearing it on a copy (rwroot1), with the ROSV gate as fallback (rwroot2).",
     done:["Confirmed the RO enforcer is XNU","Located vfs_setflags and vfs_flags"],
-    todo:["Clear MNT_RDONLY on the root mnt_flag","Boot-test; stop when the Read-only errors cease"]}
+    todo:["Clear MNT_RDONLY on the root mnt_flag","Boot-test; stop when the Read-only errors cease"]},
+
+  aic:{name:"AIC",sub:"interrupt controller",st:"ok",x:266,y:262,w:132,h:54,
+    role:"Apple Interrupt Controller. Delivers timer and device IRQs to the kernel.",
+    blurb:"Emulated and in use, so the scheduler and drivers make progress.",
+    done:["IRQ delivery works (DARWIN_AIC=1)"],todo:[]},
+  dart:{name:"DART",sub:"iommu",st:"ok",x:414,y:262,w:132,h:54,
+    role:"Device Address Resolution Tables (the Apple IOMMU).",
+    blurb:"Non-translating stubs, enough to satisfy the driver probes that expect an IOMMU.",
+    done:["Present for disp0 / dcp / ans (DARWIN_DART=1)"],todo:[]},
+  pmgr:{name:"PMGR",sub:"power manager",st:"ok",x:562,y:262,w:132,h:54,
+    role:"Power manager. Power domains report power-on instantly.",
+    blurb:"No driver stalls waiting for a rail that never comes up.",
+    done:["PS_ACTUAL = PS_TARGET"],todo:[]},
+  dsc:{name:"dyld cache",sub:"Cryptex SystemOS",st:"ok",x:710,y:262,w:164,h:54,
+    role:"The split dyld shared cache (main plus 77 subcaches) that every process maps.",
+    blurb:"Maps now (Wall #2 crossed) once the maxSlide edit was reverted to a valid signed value.",
+    done:["Cache maps system-wide","libSystem loads"],todo:[]},
+  ans:{name:"ANS / NVMe",sub:"storage coprocessor",st:"missing",x:44,y:558,w:150,h:56,
+    role:"Apple NAND Storage controller. Reports boot-status OK.",
+    blurb:"A stub. Not on the critical path while the root lives in RAM as md0.",
+    done:["BOOT_STATUS ok"],todo:["Real NVMe path only if a disk-backed root is ever used"]}
 };
 
 const T = [
@@ -304,7 +325,12 @@ const T = [
   ["launchd","r","springboard","l","ok"],
   ["springboard","r","baseboardui","l","partial","runs ~18s"],
   ["baseboardui","r","rootfs","l","blocked","needs writable"],
-  ["rootfs","r","rwpatch","l","partial","fix in flight"]
+  ["rootfs","r","rwpatch","l","partial","fix in flight"],
+  ["xnu","t","aic","b","ok"],
+  ["xnu","t","dart","b","ok"],
+  ["xnu","t","pmgr","b","ok"],
+  ["xnu","t","dsc","b","ok","Wall #2"],
+  ["xnu","l","ans","r","missing"]
 ];
 
 const MILES = [
@@ -420,8 +446,8 @@ select("cl4");
 
 // path filter
 const btns=document.querySelectorAll(".paths button");
-const SECURE=new Set(["sptm","cl4","domreg","exos","srb","txm","iboot"]);
-const BYPASS=new Set(["sptm","xnu","rtbuddy","appledcp","mbox","iomfb","dfb","screen","iboot"]);
+const SECURE=new Set(["sptm","cl4","domreg","exos","srb","txm","iboot","aic","dart","pmgr","dsc"]);
+const BYPASS=new Set(["sptm","xnu","rtbuddy","appledcp","mbox","iomfb","dfb","screen","iboot","aic","dart","pmgr","dsc","ans","launchd","springboard","baseboardui","rootfs","rwpatch"]);
 btns.forEach(b=>b.addEventListener("click",()=>{
   btns.forEach(x=>x.setAttribute("aria-pressed",x===b?"true":"false"));
   const p=b.dataset.path;

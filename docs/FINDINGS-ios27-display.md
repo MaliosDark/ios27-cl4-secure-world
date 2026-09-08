@@ -1,5 +1,14 @@
 # iOS 27 on Intel: boot framebuffer investigation
 
+> **CURRENT STATE (2026-09-08):** Full iOS 27 userspace now boots. Hundreds of daemons run and
+> SpringBoard spawns and runs (about 18 s). The current wall is that the rootfs is a READ-ONLY
+> ramdisk with no writable /private/var, so SpringBoard aborts in BaseBoardUI (BSUIMappedImageCache).
+> This is NOT the DCP/display and NOT CS_KILLED; both were crossed. Fix in flight: a kernel patch to
+> mount the md0 root read-write (XNU sets MNT_RDONLY, not APFS). Live source of truth:
+> STATE_darwinvm_boot.md and board.html in ios27-cl4-secure-world. Text below this banner predates
+> this and is kept for history.
+
+
 Host: MacBook Pro, Intel Core i9-9880H (x86_64), macOS 26.6.2, SIP enabled.
 Guest: iPhone17,3 / d47ap / t8140 (A18), iOS 27.0 beta 8 (24A5430a).
 Emulator: jprx/qemu-sptm (`-M darwin`), built native x86_64.

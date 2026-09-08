@@ -1,5 +1,14 @@
 # RESUME: iOS 27 secure-world (CL4) bring-up in darwin-vm -- state & next steps
 
+> **CURRENT STATE (2026-09-08):** Full iOS 27 userspace now boots. Hundreds of daemons run and
+> SpringBoard spawns and runs (about 18 s). The current wall is that the rootfs is a READ-ONLY
+> ramdisk with no writable /private/var, so SpringBoard aborts in BaseBoardUI (BSUIMappedImageCache).
+> This is NOT the DCP/display and NOT CS_KILLED; both were crossed. Fix in flight: a kernel patch to
+> mount the md0 root read-write (XNU sets MNT_RDONLY, not APFS). Live source of truth:
+> STATE_darwinvm_boot.md and board.html in ios27-cl4-secure-world. Text below this banner predates
+> this and is kept for history.
+
+
 Self-contained handoff so no knowledge is lost. Full narrative is in
 FINDINGS-ios27-display.md (3258 lines). This file is the actionable state.
 

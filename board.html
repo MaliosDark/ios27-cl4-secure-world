@@ -161,7 +161,12 @@
       <div id="miles"></div>
     </div>
     <div class="block">
-      <h3>The frontier - what is missing for the pixels</h3>
+      <h3>The frontier - the current wall and beyond</h3>
+      <div class="front">
+        <span class="tag c-partial">Current wall · userspace</span>
+        <h4>A writable <code>/private/var</code></h4>
+        <p>Full userspace boots and SpringBoard runs, but the rootfs is a read-only ramdisk with no data volume. SpringBoard aborts in BaseBoardUI with no writable temp dir. The fix is a kernel patch to mount md0 read-write at boot. This is the current frontier, ahead of the display work below.</p>
+      </div>
       <div class="front">
         <span class="tag c-ok">Panel on ✓ · graphical UI missing</span>
         <h4>Real guest surfaces (IOMFB)</h4>
@@ -176,8 +181,8 @@
   </div>
 
   <footer>
-    Status as of this session · repo <b style="color:var(--silk)">ios27-cl4-secure-world</b> (15 commits) · 3 guarded CPU fixes + active DCP mailbox + CL4 executing.<br>
-    It is not firmware or keys - just the map of the device. Half the pipeline (framebuffer → console) is ready; half the DCP is missing.
+    Status as of this session · repo <b style="color:var(--silk)">ios27-cl4-secure-world</b> · full userspace boots and SpringBoard runs; the current wall is the read-only rootfs, with a kernel read-write patch in flight.<br>
+    It is not firmware or keys - just the map of the device. The panel and console are lit; the last wall to a running shell is a writable filesystem, not the display.
   </footer>
 </div>
 
@@ -248,8 +253,34 @@ const C = {
   screen:{name:"SCREEN",sub:"the goal",st:"phos",x:1140,y:150,w:112,h:396,
     role:"The iPhone screen. The goal of the whole device.",
     blurb:"ON. Our DCP drives the panel and shows the REAL iOS 27 boot log (640×1136).",
-    done:["Panel driven by the emulated DCP","Full DCP→framebuffer→console scanout","Real iOS log rendered on the panel"],
-    todo:["For the graphical iOS UI: IOMFB surfaces from the full OS (not ramdisk)"]}
+    done:["Panel driven by the emulated DCP","Full DCP to framebuffer to console scanout","Real iOS log rendered on the panel"],
+    todo:["For the graphical iOS UI: IOMFB surfaces from the full OS (not ramdisk)"]},
+
+  launchd:{name:"launchd",sub:"userspace · PID 1",st:"ok",x:266,y:606,w:150,h:66,
+    role:"Process 1. Bootstraps and supervises every system and user daemon.",
+    blurb:"Full userspace now runs: hundreds of daemons launch AND execute their code, not just spawn.",
+    done:["Survives (DARWIN_NOPAC + txm.sc + nopf4)","Hundreds of daemons run 30 to 46 s","CS_KILLED, PAC and TXM selector-38 all defeated"],
+    todo:["Reboots on the SpringBoard crash-loop (3 strikes) until the rootfs is writable"]},
+  springboard:{name:"SpringBoard",sub:"the iOS shell",st:"partial",x:452,y:606,w:176,h:66,
+    role:"The home screen and UI shell. The first daemon to reach running, at about 31 s.",
+    blurb:"Spawns and runs about 18 s, then aborts. Not a display problem: backboardd survives fine.",
+    done:["Spawns and runs","First daemon up"],
+    todo:["Aborts in BaseBoardUI because there is nowhere writable"]},
+  baseboardui:{name:"BaseBoardUI",sub:"mapped image cache",st:"blocked",x:664,y:606,w:190,h:66,
+    role:"Builds SpringBoard's memory-mapped image cache (BSUIMappedImageCache).",
+    blurb:"Traps on a deliberate abort: it needs a writable temp dir to map its CPBitmap data and gets EROFS.",
+    done:["Fault pinned with DARWIN_TRAPLOG + cache symbolication"],
+    todo:["initWithUniqueIdentifier:options: needs a writable /private/var"]},
+  rootfs:{name:"md0 rootfs",sub:"read-only ramdisk",st:"blocked",x:890,y:606,w:160,h:66,
+    role:"The 16 GB iOS root filesystem loaded into guest RAM as md0.",
+    blurb:"Mounts and boots, but READ-ONLY. There is no separate writable /private/var data volume. This is the current wall.",
+    done:["Mounts, boots, re-owned to root"],
+    todo:["XNU marks it MNT_RDONLY at mountroot","Host role change and runtime remount both refused"]},
+  rwpatch:{name:"rw patch",sub:"kernel · in flight",st:"partial",x:1086,y:606,w:150,h:66,
+    role:"Kernel patch to mount the md0 root read-write at boot, so /private/var is writable.",
+    blurb:"Confirmed XNU sets MNT_RDONLY, not APFS. Clearing it on a copy (rwroot1), with the ROSV gate as fallback (rwroot2).",
+    done:["Confirmed the RO enforcer is XNU","Located vfs_setflags and vfs_flags"],
+    todo:["Clear MNT_RDONLY on the root mnt_flag","Boot-test; stop when the Read-only errors cease"]}
 };
 
 const T = [
@@ -268,7 +299,12 @@ const T = [
   ["mbox","b","iomfb","t","missing"],
   ["mbox","r","dfb","l","ok","live scanout"],
   ["iomfb","r","dfb","l","missing"],
-  ["dfb","r","screen","l","ok"]
+  ["dfb","r","screen","l","ok"],
+  ["xnu","b","launchd","t","ok"],
+  ["launchd","r","springboard","l","ok"],
+  ["springboard","r","baseboardui","l","partial","runs ~18s"],
+  ["baseboardui","r","rootfs","l","blocked","needs writable"],
+  ["rootfs","r","rwpatch","l","partial","fix in flight"]
 ];
 
 const MILES = [
@@ -278,7 +314,11 @@ const MILES = [
   ["04","DARWIN_RTKIT=1","The emulated DCP mailbox turns on - previously asleep"],
   ["05","dtree_nr2","RTBuddy(DCP) releases the secure path and uses the mailbox"],
   ["06","AppleDCP boots","The display driver runs its init against the mailbox"],
-  ["07","SCREEN ON","Our DCP paints the real iOS boot log on the panel - full scanout"]
+  ["07","SCREEN ON","Our DCP paints the real iOS boot log on the panel - full scanout"],
+  ["08","Full userspace","launchd runs hundreds of daemons, not just spawns them (NOPAC + txm.sc + nopf4)"],
+  ["09","SpringBoard runs","The iOS shell is the first daemon up and runs about 18 s"],
+  ["10","Root cause found","SpringBoard aborts in BaseBoardUI: the rootfs is read-only, not a display bug"],
+  ["11","Kernel rw patch","XNU marks the root MNT_RDONLY; patching a copy to mount it read-write"]
 ];
 
 const COL = {ok:getcol("--ok"),partial:getcol("--partial"),blocked:getcol("--blocked"),missing:getcol("--missing"),ready:getcol("--phos"),phos:getcol("--phos")};
@@ -356,7 +396,7 @@ Object.keys(C).forEach(drawChip);
 // tally
 const counts={ok:0,partial:0,blocked:0,missing:0};
 Object.values(C).forEach(c=>{if(counts[c.st]!==undefined)counts[c.st]++});
-const tallyDefs=[["c-ok","funcionan",counts.ok],["c-partial","parciales",counts.partial],["c-blocked","bloqueados",counts.blocked],["c-missing","por construir",counts.missing]];
+const tallyDefs=[["c-ok","working",counts.ok],["c-partial","partial",counts.partial],["c-blocked","blocked",counts.blocked],["c-missing","to build",counts.missing]];
 document.getElementById("tally").innerHTML=tallyDefs.map(([cl,l,n])=>
   `<span class="stat"><i class="dot ${cl}"></i><b>${n}</b> ${l}</span>`).join("");
 

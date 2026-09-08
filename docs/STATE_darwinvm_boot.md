@@ -867,3 +867,71 @@ would turn a SpringBoard crash into a serial panic w/ backtrace); (2) kernel-gdb
 EL0 synchronous-exception / exception_triage path filtered to the SpringBoard proc, dump trapframe;
 (3) route userspace crash reports off-box. Getting this reason is the gate that decides whether the
 remaining work is the DCP display project or a cheaper shared-cause fix.
+
+## 2026-09-08 -- BREAKTHROUGH: the SpringBoard crash is the READ-ONLY ROOTFS, not the DCP
+Caught the exact SpringBoard fault with a new QEMU EL0-trap logger and symbolicated it. The
+display/DCP is NOT what kills SpringBoard.
+
+### How it was caught (reusable method)
+- Added a QEMU hook (env DARWIN_TRAPLOG=1) in qemu-sptm/target/arm/helper.c
+  arm_cpu_do_interrupt_aarch64(): logs EL0 BRK/UDEF (the SIGTRAP source) with pc/esr/regs. BRK
+  from EL0 is rare (deliberate asserts), so it is quiet. Rebuild: ninja qemu-system-aarch64.
+- Boot the winning config with DARWIN_TRAPLOG=1. Result: 4 EL0 BRK traps == the 4 SIGTRAPs
+  launchd reported (logd x1 + SpringBoard x3). The 3 SpringBoard crashes ALL trap at the SAME
+  shared-cache VA pc=0x1bb2383f0 (brk #0), with x16=0x18f8807a4.
+- The VM applies NO dyld-cache slide (slide=0): 0x1bb2383f0 is inside the unslid shared region
+  (0x180000000..0x2FCDD8000), so cache VAs map directly. Symbolicate with:
+  ipsw dyld a2s <mainDSC> 0x1bb2383f0  (main cache is in
+  /private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e).
+
+### The crash
+- pc=0x1bb2383f0 = -[BSUIMappedImageCache initWithUniqueIdentifier:options:] + 1140 (BaseBoardUI).
+- x16=0x18f8807a4 = __bs_set_crash_log_message (BaseBoard) -- the reason string is set right before
+  the brk. Nearby cstrings (subcache .15, base 0x1b8400000) spell out the reason:
+    "BSUIMappedImageCache found relative tmpDir=%@ for %@"
+    "BSUIMappedImageCache failed to get relative tmpDir from dirhelper for %@ : falling back to
+     NSTemporaryDirectory=%@"
+    "BSUIMappedImageCache: error mapping CPBitmap data from path=%{public}@ : %{public}@"
+  => SpringBoard needs a WRITABLE temp dir to memory-map/copy CPBitmap (compiled image) data. On a
+  read-only filesystem the tmpDir/mmap fails and BaseBoardUI aborts (brk) -> SIGTRAP.
+
+### Root cause
+darwin-vm boots the ENTIRE rootfs as one READ-ONLY md0 ramdisk with NO writable /private/var data
+volume. On a real iPhone /private/var is a separate writable Data partition; here it is part of the
+sealed read-only root. Corroborating serial errors on every boot:
+  "fixup-mobile-tmp could not create /private/var/mobile/tmp: Read-only file system"
+  lockdownd/racoon/mDNSResponder "Failed to bind() a socket: ... error=Read-only file system"
+So SpringBoard (and other daemons) simply have nowhere writable. This has NOTHING to do with the
+display coprocessor. The DCP work is deferred; SpringBoard cannot even finish BaseBoardUI init
+without a writable /var.
+
+### The fix (in progress): give the guest a writable /var
+Approach: remount root read-write early (writes go to guest RAM; no host persistence needed).
+Ownership lesson learned (important): launchd REJECTS a newly-created LaunchDaemon plist that is
+not root:wheel ("Caller specified a plist with bad ownership/permissions"); we cannot sudo/chown in
+this environment (no TTY password). BUT an in-place PlistBuddy edit of an EXISTING root:wheel plist
+PRESERVES root:wheel even on an `hdiutil attach -owners off` mount (verified: SpringBoard.plist
+stayed root:wheel after edit). So repurpose an existing root-owned daemon: we hijacked
+/System/Library/LaunchDaemons/bootps.plist (Disabled DHCP server, safe) in place into
+Label=com.apple.vphone.rootrw running `/sbin/mount -uw /` at RunAtLoad.
+Status: the daemon is now ACCEPTED (root-owned) and spawns, BUT in this restore/ramdisk boot it
+lands in the user/501 on-demand-only domain and stalls at xpcproxy (the `/sbin/mount` exec is not
+visibly reached; no rw achieved; SpringBoard still crashes 3x -> reboot). Also unconfirmed whether
+APFS will even honor an rw remount of this root (cache strings warn "must mount read-write after
+revert to unsealed snapshot" / "Remounting read/write is not supported" for some paths).
+
+### Concrete next steps for the writable-/var fix
+1. Make the remount actually run as root at load: force the SYSTEM domain (not user/501 on-demand),
+   or pick a daemon launchd runs at-load here, or verify `/sbin/mount -uw /` exec + capture its
+   stderr on /dev/console (run `/sbin/mount` with no args first to confirm exec + see live flags).
+2. If APFS refuses rw remount of the md0 root, use tmpfs overlays (mount_tmpfs exists) on the
+   specific writable paths (/private/var/mobile/tmp, /private/var/folders for dirhelper, and the
+   BaseBoardUI cache path), or add a second writable data image mounted at /private/var.
+3. Most robust / launchd-independent: kernel-patch the rootfs mount to clear MNT_RDONLY (the kernel
+   mounts md0s1 at "container_rootmount / handle_mount"), so / is rw from the start.
+Once /var is writable, SpringBoard should get past BaseBoardUI init; THEN re-evaluate whether a
+display surface (DCP) is the next wall.
+
+### qemu-sptm change this session
+- target/arm/helper.c: added DARWIN_TRAPLOG EL0 BRK/UDEF logger in arm_cpu_do_interrupt_aarch64
+  (gated on getenv("DARWIN_TRAPLOG"); quiet otherwise). Rebuilt OK.

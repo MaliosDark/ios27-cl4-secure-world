@@ -24,9 +24,10 @@ and lighting the **DCP display panel** with the live boot log along the way.
 <p align="center"><em>The device we built in software, chip by chip. Green works, amber is the current wall, red is blocked, gray is a stub or a later wall. Interactive version: <code>board.html</code>.</em></p>
 
 <p align="center">
-  <img src="shots/panel-boot-polished.png" width="220" alt="Graphical boot screen on the DCP panel"/>
-  <img src="shots/panel-root-shell.png" width="220" alt="Interactive root shell on the panel"/>
+  <img src="shots/panel-ios-console.png" width="240" alt="The live iOS kernel console rendered on the emulated panel, in English"/>
 </p>
+
+<p align="center"><em>The emulated panel with the live English kernel console (DCP LINK UP, real driver init, APFS mountroot). SpringBoard has not rendered yet -- see the board above for the current wall.</em></p>
 
 > **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root**, and
 > starts `launchd`. The current frontier is the **dyld shared cache** (shipped in the
@@ -77,7 +78,6 @@ Both are working today; the remaining gate is a firmware component the user supp
 | ![boot screen](shots/panel-boot-screen.png) | **Graphical boot screen.** Progress ring and stage label driven by real boot milestones scraped from the serial log. |
 | ![console](shots/panel-ios-console.png) | **Live kernel console** rendered on the panel with a built-in VGA font. |
 | ![root shell](shots/panel-root-shell.png) | **Interactive root shell** (`bash-5.3#`): panel and keyboard wired to the guest UART. |
-| ![root mounted](shots/full-os-root-mounted.png) | **Full iOS root mounted.** `md0` APFS `mountroot`, `/sbin/launchd` starts. |
 
 ---
 

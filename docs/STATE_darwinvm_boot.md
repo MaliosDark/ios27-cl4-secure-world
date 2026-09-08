@@ -682,3 +682,48 @@ associations are naturally in-range, PAC works without NOPAC, and no bypass is n
 - firmware/txm.orig (pristine TXM backup)
 - Boot combo that reaches SpringBoard-spawn: DARWIN_NOPAC=1 + bootkc.md0.nopf4 + firmware/txm
   (flood, slow) OR + firmware/txm.assoc_ok (fast, but SpringBoard invalid-page-killed).
+
+## ############ 2026-09-08 -- iOS 27 FULL BOOT: SpringBoard runs 18s; reboot from 3 crashes ############
+Winning combo: DARWIN_NOPAC=1 + bootkc.md0.nopf4 + firmware/txm.sc + rootfs_with_cryptex.dmg
+(re-owned to root). Result: the ENTIRE system boots and runs ~37 seconds -- every daemon runs
+30-37s (tccd 36.9s, configd 37.3s, wifid 35.7s, backboardd, usermanagerd, ...). SpringBoard
+[pid 6] runs for 18.6 SECONDS of real init.
+
+Two fixes were the key beyond the earlier walls:
+1. DARWIN_NOPAC=1 -- makes QEMU AUT* strip-only (no FPAC), so daemons stop crashing on the
+   unmapped arm64e auth GOTs at load. (Kills the SIGTRAP-at-load crash loop.)
+2. firmware/txm.sc -- patch TXM so the selector-38 "associate code region" secure-channel
+   check returns allowed. Error 42 was "%s: disallowed due to secure channel constraints"
+   (check at txm 0x17033d00, which reads global 0x17088db0 and denies in this SEP-less VM).
+   Patch: 0x17033d04 -> mov w0,#1 ; 0x17033d08 -> ret. This kills the TXM flood AND lets the
+   associations record so shared-cache pages validate (no OS_REASON_CODESIGNING invalid-page).
+   NOTE: the earlier txm.assoc_ok (fake the return) and txm.assoc2 (NOP the code-limit branch)
+   were WRONG -- 42 is the secure-channel check, not the code-limit (0x24). txm.sc is correct.
+
+FINAL WALL: SpringBoard exits with SIGTRAP ("sent by exc handler") after ~18s of init -- a
+SpringBoard-INTERNAL abort/assertion, not a load-time PAC/CS crash. After 3 such crashes launchd
+logs "<Critical>: rebooting due to critical process crashes: SpringBoard" and commits to a
+system shutdown/reboot; the VM has no restart mechanism so it ends in
+panic "Halt/Restart Timed Out @IOPlatformExpert.cpp:900". SpringBoard's own crash reason is NOT
+on the UART serial (it goes to the in-memory unified log), so diagnosing the SIGTRAP needs
+either an lldb catch of SpringBoard's userspace trap or extracting its crash report.
+
+## Next steps
+- To SEE it: boot with the QEMU window (-display, i.e. run_rootfs.sh without -display none):
+    cd /Users/maliosdark/darwin-vm
+    DARWIN_NOPAC=1 BOOTKC=firmware/bootkc.md0.nopf4 ROOTFS=firmware/rootfs_with_cryptex.dmg \
+      TXM=firmware/txm.sc ./run_rootfs.sh
+  (run_rootfs.sh hardcodes -txm "$FW/txm"; either edit it to honor $TXM, or cp txm.sc over txm
+  after backing up, or launch qemu directly with -txm firmware/txm.sc.) During SpringBoard's
+  ~18s run the DCP framebuffer should show its boot UI before the crash/reboot.
+- To stabilise: (a) diagnose SpringBoard's SIGTRAP (lldb: break the userspace exception / read
+  its abort; or pull its crash log) and fix the unmet dependency (likely a user-session/persona
+  or a display/service assertion); (b) optionally raise launchd's critical-crash reboot
+  threshold / prevent the reboot so SpringBoard keeps retrying while iterating.
+
+## Working artifacts (firmware/)
+- txm.sc            TXM secure-channel-constraint bypass (selector-38 allowed). USE THIS.
+- txm.orig          pristine TXM backup.
+- bootkc.md0.nopf4  Wall #2 fix kernel.
+- rootfs_with_cryptex.dmg  valid cache (maxSlide reverted) + re-owned to root.
+- Boot env: DARWIN_NOPAC=1.

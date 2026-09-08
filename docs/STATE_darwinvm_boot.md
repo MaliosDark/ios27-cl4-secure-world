@@ -15,7 +15,8 @@ qemu-sptm on an Intel Mac. Goal: reach SpringBoard.
 - [x] dyld shared cache MAPS           (maxSlide=0; Wall #2 crossed)
 - [x] libSystem loads (no more "Library not loaded")
 - [x] launchd survives + dyld cache MAPS + full userspace (bootkc.md0.nopf4; Wall #2 crossed)
-- [ ] daemons launch  <-- WALL #3: rootfs file ownership is uid 501, launchd rejects (error 122)
+- [x] daemons launch (rootfs re-owned to root; launchd bootstraps hundreds of daemons)
+- [ ] daemons RUN their code  <-- FINAL WALL: TXM selector-38 association fails (auth GOTs unmapped; nopf4 skipped the auth-remap)
 - [ ] SpringBoard
 
 ## Current wall (CONFIRMED root cause) -- REFRAMED 2026-09-07
@@ -584,3 +585,46 @@ Using the wrong dmg reproduces "dyld cache not loaded" + a nested PC-alignment p
 launchd-death panic handler), NOT our progress. The working combo that reached full userspace:
 bootkc.md0.nopf4 + rootfs_with_cryptex.dmg (cache maxSlide=0x20000000 valid Apple sig; the
 nopf4 kernel NOP skips the over-rejecting map-info check so the cache still maps).
+
+## ######## 2026-09-08 -- iOS 27 USERSPACE BOOTSTRAPS; final wall = auth-remap/GOT association
+With bootkc.md0.nopf4 + rootfs_with_cryptex.dmg (maxSlide reverted to 0x20000000, valid sig)
++ the rootfs re-owned to root (fix_rootfs_ownership.sh), the boot goes MUCH further:
+- dyld: "dyld cache mapped system-wide: customer, auth GOTs: unmapped"
+- launchd (PID 1) bootstraps the WHOLE system: hundreds of LaunchDaemons load (powerd, wifid,
+  locationd, healthd, sharingd, watchdogd, containermanagerd, SpringBoard, VoiceOverTouch, ...).
+  The hardware/variant rejects (securityresearchdeviceinit, dietapplecamerad, checkerboard,
+  ClarityBoard: "cannot be loaded on this hardware / current os variant / boot environment")
+  are NORMAL iOS behavior. Time advances to ~00:01:05. This is iOS 27 userspace running.
+
+FINAL WALL: a flood of `TXM [Error]: selector: 38 | 42` (kernel-side generic TXM error string
+@0xa2640 in bootkc). No daemon prints its own output -> daemons exec but never run their code.
+Root cause chain (all confirmed by static RE of txm + kernel + the dyld log):
+- The map-info check we NOP'd for Wall #2 (0xb0bd118 cbnz [sp+0xf4]=0x63 -> 0xb0bd8a8) WAS the
+  arm64e auth-remap / GOT-mapping step. nopf4 SKIPS it, so the cache maps but its __AUTH GOTs
+  are NOT remapped (hence dyld's "auth GOTs: unmapped").
+- TXM selector 38 = the CSM "associate code region with code signature" op. Dispatch:
+  main CSM dispatcher 0x1703b210 (table @0x1703b684, selector-1, max 0x37); selector 38 handler
+  0x1703b234 -> 0x1703c63c -> core op 0x17032b38. That op validates the associated region is
+  within the code limits ([x20+0x58]..[x20+0x60]) and carries the string
+  "%s: association spans outside of code limit". Return codes live in w24 (0xc,0x12,0x13,0x17,
+  0x24,0x25,... and 0x2a=42 further down). error 42 = an association failure.
+- Because the auth GOTs are unmapped, every shared-cache dylib association (each daemon's dyld
+  loading libSystem et al.) fails selector-38 with 42, in a tight retry spin -> boot stalls
+  before SpringBoard renders.
+
+## THE REAL FIX (final frontier): make the auth-remap SUCCEED, do not skip it
+nopf4 was a shortcut that crossed Wall #2 by skipping the auth-remap; that is wrong for a full
+boot. The correct fix is to make vm_shared_region_map_and_slide_setup's auth-remap path
+(0xb0bd8a8, reached when map-info struct+0x44 != 0) SUCCEED instead of returning kr=1. It fails
+because 0xb0b9c3c (an address-range predicate against the 0x7e5a000 table) finds an address
+outside the expected region (VA-geometry mismatch in the SEP-less VM). Fix options:
+1. Correct the auth-remap so the GOTs map (understand 0xb0bd8a8 / 0xb0b9c3c and why the range
+   check fails; likely a VA-geometry / shared_region_pager setup issue). Cleanest; needs lldb.
+2. If PAC is effectively a no-op in this QEMU config, an alternate is to make the associations
+   pass without the remap (map the GOT pages plainly). Requires care.
+Either way, once the auth GOTs map and selector-38 associations succeed, daemons should run and
+SpringBoard should reach the framebuffer.
+
+## Exact-reproduce
+BOOTKC=firmware/bootkc.md0.nopf4 ROOTFS=firmware/rootfs_with_cryptex.dmg ./run_rootfs.sh
+(rootfs re-owned to root via fix_rootfs_ownership.sh). Filter the log: grep -av 'TXM \[Error\]'.

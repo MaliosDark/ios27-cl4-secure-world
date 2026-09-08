@@ -935,3 +935,50 @@ display surface (DCP) is the next wall.
 ### qemu-sptm change this session
 - target/arm/helper.c: added DARWIN_TRAPLOG EL0 BRK/UDEF logger in arm_cpu_do_interrupt_aarch64
   (gated on getenv("DARWIN_TRAPLOG"); quiet otherwise). Rebuilt OK.
+
+## 2026-09-08 -- Writable-/var fix attempts: remount is late AND likely ineffective; kernel-mount-time rw is the robust path
+Confirmed the fix mechanism and the launchd plumbing, but hit two walls that point to a kernel patch.
+
+### What works
+- Repurposed /System/Library/LaunchDaemons/bootps.plist (root:wheel, safe DHCP daemon) IN PLACE
+  into Label=com.apple.vphone.rootrw running `/sbin/mount -uw /`. In-place PlistBuddy edits keep
+  root:wheel even under `hdiutil attach -owners off`, so launchd accepts it (a freshly-created
+  501-owned plist is rejected: "Caller specified a plist with bad ownership/permissions").
+- Adding `LimitLoadToSessionType=System` moves it from the on-demand user/501 domain into the
+  system domain (verified: log shows "system/com.apple.vphone.rootrw"). `/sbin/mount` then DOES
+  exec ("Successfully spawned mount because speculative"), no error printed.
+
+### The two walls
+1. TIMING: launchd brings this daemon up only ~52s (speculative), even with KeepAlive=true +
+   ThrottleInterval=5. SpringBoard spawns ~31s and crash-loops out by ~46s -- BEFORE the mount.
+   logd runs early only because it is a hard dependency of logging; an ordinary LaunchDaemon is
+   demanded late here.
+2. EFFECTIVENESS: in the one boot where mount ran at 52s, SpringBoard[90] spawned at 54.7s (AFTER
+   the mount) and STILL hit the same BSUIMappedImageCache brk. So `mount -uw /` did not actually
+   make / writable. The cache strings warn "Remounting read/write is not supported" / "must mount
+   read-write after revert to unsealed snapshot": an rw REMOUNT/update of the sealed APFS root is
+   refused. An INITIAL rw mount is fine (that is how APFS data volumes mount), so the fix must
+   happen at mount time, not as an update.
+
+### Environment facts (constrain the fix)
+- The rootfs has NO shell (/bin/sh, bash, zsh all absent) and no /usr/bin/touch or mkdir; only
+  /sbin/mount. So a LaunchDaemon can only exec a single binary (no scripting to chain mount+mkdir).
+- /private/var/folders EXISTS (empty) -> dirhelper CAN populate /var/folders/<uuid>/T once / is rw
+  (this is BSUIMappedImageCache's primary tmpDir path). /private/var/tmp exists (0777).
+  /private/var/mobile/tmp does NOT exist (the fixup-mobile-tmp boot task failed to create it at
+  15s because / was read-only).
+- Reboot policy: launchd ConsecutiveCrashCount 3-strike on the critical SpringBoard
+  ("rebooting due to critical process crashes: SpringBoard"; strings: PanicOnConsecutiveCrash,
+  ConsecutiveCrashCount, "%hu/%hu").
+
+### THE robust fix (next): make the kernel mount the md0 root READ-WRITE at boot
+The kernel mounts md0s1 read-only very early ("container_rootmount: boot from ramdisk /dev/md0" ->
+"handle_mount: md0s1 ... flags: 0x1"). If the root is rw from time 0, then fixup-mobile-tmp (15s)
+succeeds, dirhelper works, and SpringBoard's BaseBoardUI init finds a writable tmpDir -> no brk.
+Plan: locate where MNT_RDONLY is set for the rootfs mount in bootkc (XNU imageboot/vfs_mountroot
+path, or the APFS handle_mount flag 0x1) and patch it to mount rw. This is launchd-independent and
+races nothing. Fallbacks if APFS still refuses: a separate writable data image mounted at
+/private/var, or tmpfs overlays (mount_tmpfs exists) -- both still need an early root exec, so the
+kernel patch is preferred.
+Note: the DCP/display is NOT on this critical path; it is deferred until SpringBoard survives its
+BaseBoardUI init.

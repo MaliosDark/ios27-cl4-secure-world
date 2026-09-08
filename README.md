@@ -18,6 +18,12 @@ using [`jprx/darwin-vm`](https://github.com/jprx/darwin-vm) and its `qemu-sptm` 
 and lighting the **DCP display panel** with the live boot log along the way.
 
 <p align="center">
+  <img src="board.png" width="900" alt="The secure-world board: emulated silicon and the boot path to SpringBoard"/>
+</p>
+
+<p align="center"><em>The device we built in software, chip by chip. Green works, amber is the current wall, red is blocked, gray is a stub or a later wall. Interactive version: <code>board.html</code>.</em></p>
+
+<p align="center">
   <img src="shots/panel-boot-polished.png" width="220" alt="Graphical boot screen on the DCP panel"/>
   <img src="shots/panel-root-shell.png" width="220" alt="Interactive root shell on the panel"/>
   <img src="shots/full-os-root-mounted.png" width="220" alt="Full iOS root filesystem mounted"/>

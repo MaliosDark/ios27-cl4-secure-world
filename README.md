@@ -75,9 +75,9 @@ Both are working today; the remaining gate is a firmware component the user supp
 | | |
 |---|---|
 | ![scanout](shots/panel-scanout.png) | **Panel lit.** Emulated DCP scanout points the QEMU surface straight at guest framebuffer RAM. |
-| ![boot screen](shots/panel-boot-screen.png) | **Graphical boot screen.** Progress ring and stage label driven by real boot milestones scraped from the serial log. |
+| ![boot screen](shots/panel-boot-screen.png) | **Graphical boot screen (full OS).** English progress ring driven by the real boot stage, over the live kernel console as hundreds of daemons launch. |
 | ![console](shots/panel-ios-console.png) | **Live kernel console** rendered on the panel with a built-in VGA font. |
-| ![root shell](shots/panel-root-shell.png) | **Interactive root shell** (`bash-5.3#`): panel and keyboard wired to the guest UART. |
+| ![restore console](shots/panel-root-shell.png) | **Restore ramdisk (Boot A).** The English restore console on the panel; panel and keyboard are wired to the guest UART. |
 
 ---
 

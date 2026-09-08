@@ -1086,3 +1086,13 @@ the RO/shadow path) -- but validate this does not skip required mount setup. Pre
 the mount fn (ipsw -D) or map the struct-mount mnt_flag offset to be certain before patching; a
 wrong kernel patch breaks the boot. Do NOT patch BSUIMappedImageCache (grok): once /private/var +
 /tmp are RW, SpringBoard stops the brk and should survive BaseBoardUI init.
+
+## 2026-09-09 -- panel render fix: 16-byte stride alignment (flat on-panel console)
+The on-panel console skewed diagonally at the 1179-wide framebuffer: 1179*4 = 4716 bytes is not
+16-byte aligned, so QEMU's display surface read rows at an aligned stride while apple_dcp wrote at
+4716, shifting each row. Fixed by setting DARWIN_FB_WIDTH = 1180 in qemu-sptm/hw/arm/darwin.c
+(1180*4 = 4720, 16-byte aligned); 1179 stays the device-native target, the extra pixel is stride
+padding. The panel now renders flat and readable. Regenerated the two Spanish-era README panel
+screenshots as flat English captures (shots/panel-boot-screen.png = full-OS boot, ring + live
+daemon console; shots/panel-root-shell.png = restore-ramdisk Boot A console). The misleading
+kernel-panic screenshot (full-os-root-mounted.png) was already removed.

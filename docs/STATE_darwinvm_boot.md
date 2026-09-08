@@ -628,3 +628,57 @@ SpringBoard should reach the framebuffer.
 ## Exact-reproduce
 BOOTKC=firmware/bootkc.md0.nopf4 ROOTFS=firmware/rootfs_with_cryptex.dmg ./run_rootfs.sh
 (rootfs re-owned to root via fix_rootfs_ownership.sh). Filter the log: grep -av 'TXM \[Error\]'.
+
+## 2026-09-08 (late) -- userspace boots to SpringBoard-spawn; final wall = arm64e auth-GOT association CS
+State of play after the auth/CS investigation (all with rootfs_with_cryptex.dmg re-owned to
+root, cache maxSlide reverted/valid):
+
+CONFIRMED working: full launchd bootstrap; backboardd, usermanagerd, pfd, centaurid, batterytrapd,
+MobileGestaltHelper etc. spawn and RUN; SpringBoard [pid] reaches "service state: running".
+
+The remaining wall has TWO layers, both rooted in the arm64e shared-cache __AUTH GOTs being
+unmapped (dyld: "dyld cache mapped system-wide: customer, auth GOTs: unmapped"):
+1. PAC layer: daemons that deref cache auth pointers take FPAC -> SIGTRAP and crash-loop.
+   FIX FOUND: boot env DARWIN_NOPAC=1 (this qemu-sptm fork makes AUT* strip-only, no fault).
+   With it, SIGTRAP crashes vanish.
+2. Code-signing layer: after NOPAC, SpringBoard/tccd/locationd/usermanagerd exit with
+   OS_REASON_CODESIGNING (namespace 3) code 0x2 = CODESIGNING_EXIT_REASON_INVALID_PAGE, ~300ms
+   in. Root: TXM selector-38 "associate code region with signature" fails ("association spans
+   outside of code limit") because the GOT region does not match the code-signature's code
+   limits ([csobj+0x58]..[csobj+0x60]).
+
+Bypasses tried (all inferior):
+- txm.assoc_ok (patch TXM selector-38 to return success, firmware/txm.assoc_ok: NOP bfxil
+  @0x17032fe0 + force-branch @0x17032fc4): KILLS the flood AND loads fine (=> TXM is patchable
+  in this VM, SPTM does not re-verify it). BUT it fakes the return WITHOUT recording a valid
+  association -> kernel then treats those pages as invalid -> OS_REASON_CODESIGNING invalid-page
+  kill. So faking selector-38's *return* is wrong.
+- cs_enforcement_disable=1 boot-arg: AMFI panics on purpose ("can't has cs_enforcement_disable"
+  @AppleMobileFileIntegrity.cpp:5710). Patched the panic call away (bootkc.md0.csoff: NOP the
+  bl @0xfffffff0091acc54 to the cs_enforcement panic thunk 0x91c7ba8) -> no panic, but the boot
+  then STALLS early at ts ~00:00:28 (disabling CS enforcement breaks/spins early userspace).
+  => dead end.
+- Original txm (real selector-38 error 42): floods 99% of the serial (TXM error logger, kernel
+  0xb043da4) -> boot crawls; with NOPAC it may or may not CS-kill (too slow to reach SpringBoard).
+  Silencing the logger by NOP'ing 0xb043da4 (bootkc.md0.quiet) BROKE early boot (0 serial) --
+  the logger is on a critical path; do not NOP it.
+
+## THE clean fix (next): make TXM selector-38 RECORD a real association (not fake the return)
+The op is txm 0x17032b38. Its success path (~0x17032d70) calls the association-record
+(0x17031e0c) and returns w24=0; the "outside code limit" checks are `ldr x8,[x20,#0x58];
+cmp x8,x23; b.hi err` (0x17032d58) and `ldr x8,[x20,#0x60]; cmp x8,x26; b.lo err` (0x17032d64).
+If the GOT region dyld passes is actually correct and only the csobj code-limits are wrong in
+this VM (GOTs unmapped), patching those two branches to fall through -> the op RECORDS the given
+region as a valid association -> pages validate against it -> no invalid-page kill. Needs a
+runtime capture of csobj[0x58]/[0x60] vs region (x23,x26) to confirm before patching. The error
+code 42 (0x2a) that floods is a DIFFERENT selector-38 sub-error (not the 0x24 "outside limit"):
+find where w24=0x2a is set in 0x17032b38 or its callees (0x17031e0c/0x170480a4/0x17045b10).
+Proper end-state fix remains: make the kernel auth-remap actually map the __AUTH GOTs (then
+associations are naturally in-range, PAC works without NOPAC, and no bypass is needed).
+
+## Artifacts added
+- firmware/txm.assoc_ok  (TXM selector-38 -> success; kills flood but causes invalid-page)
+- firmware/bootkc.md0.csoff (nopf4 + AMFI cs_enforcement panic NOP; stalls early -- not useful)
+- firmware/txm.orig (pristine TXM backup)
+- Boot combo that reaches SpringBoard-spawn: DARWIN_NOPAC=1 + bootkc.md0.nopf4 + firmware/txm
+  (flood, slow) OR + firmware/txm.assoc_ok (fast, but SpringBoard invalid-page-killed).

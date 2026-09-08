@@ -1,32 +1,47 @@
 # darwin-vm iOS 27 boot -- LIVE STATE (read this first)
 
 One-screen "where are we / what's been tried" so we never re-litigate settled points.
-Last updated: 2026-09-07.
+Last updated: 2026-09-08.
 
 Target: iOS 27 (iPhone17,3 / t8140 / d47ap, build 24A5430a) under jprx/darwin-vm +
 qemu-sptm on an Intel Mac. Goal: reach SpringBoard.
 
-## Boot chain status
+## Boot chain status (CURRENT -- 2026-09-08)
 - [x] SPTM -> XNU -> secure world (CL4)
 - [x] Image4/nonce without SEP        (DVM-1 magazine stubs)
 - [x] SSV seal / root-hash-auth        (DVM-3, DVM-4)
 - [x] bsd_init FSIOC_KERNEL_ROOTAUTH   (DVM-5 gate NOP)
 - [x] APFS root mounts (RaveSeedD47OS), launchd (PID 1) execs
-- [x] dyld shared cache MAPS           (maxSlide=0; Wall #2 crossed)
-- [x] libSystem loads (no more "Library not loaded")
-- [x] launchd survives + dyld cache MAPS + full userspace (bootkc.md0.nopf4; Wall #2 crossed)
-- [x] daemons launch (rootfs re-owned to root; launchd bootstraps hundreds of daemons)
-- [ ] daemons RUN their code  <-- FINAL WALL: TXM selector-38 association fails (auth GOTs unmapped; nopf4 skipped the auth-remap)
-- [ ] SpringBoard
+- [x] dyld shared cache MAPS           (maxSlide reverted to valid; Wall #2 crossed)
+- [x] launchd survives + FULL USERSPACE: hundreds of daemons launch AND RUN their code
+- [x] CS_KILLED / PAC / TXM selector-38 all SOLVED (DARWIN_NOPAC=1 + txm.sc + bootkc.md0.nopf4)
+- [x] SpringBoard SPAWNS and RUNS (~15-22s first instance, pid varies e.g. [6]/[89]/[91])
+- [ ] SpringBoard SURVIVES  <-- CURRENT WALL: it aborts in BaseBoardUI on the READ-ONLY rootfs
+- [ ] usable UI (needs SpringBoard alive; display/DCP is a LATER wall, not the current one)
 
-## Current wall (CONFIRMED root cause) -- REFRAMED 2026-09-07
-NOTE: check_np's errno 12 is NORMAL (dyld's pre-map call; region legitimately
-empty, sr_first_mapping==-1). The REAL failure is dyld's
-`shared_region_map_and_slide_2_np` syscall -> `vm_shared_region_map_file_setup`
-mapping loop: its `vm_map_enter_mem_object_control` into the nested shared submap
-never sets `sr_first_mapping` (map fails, likely a whole-span/permanent+immutable
-occupant blocks the FIXED placement). Target THAT, not check_np.
-sr_first_mapping source = vm_shared_region.c:1946 (= sms_address - sr_base_address).
+## CURRENT WALL (root-caused 2026-09-08) -- read-only rootfs, NOT CS_KILLED, NOT the DCP
+Full iOS 27 userspace boots. SpringBoard spawns (pid e.g. [91]), runs ~15-22s, then aborts with
+SIGTRAP; launchd's 3-strike consecutive-crash policy reboots ("rebooting due to critical process
+crashes: SpringBoard"), which cascades into the SIGTERM logout teardown and finally the
+"Halt/Restart Timed Out" panic (that panic is just the VM shutdown never completing -- a symptom,
+not the cause).
+EXACT cause (caught with the DARWIN_TRAPLOG EL0-trap logger + ipsw/capstone symbolication, slide=0):
+all 3 SpringBoard crashes are a brk in
+  -[BSUIMappedImageCache initWithUniqueIdentifier:options:]  (BaseBoardUI),
+which needs a WRITABLE temp dir (dirhelper/NSTemporaryDirectory) to mmap CPBitmap image data. The
+rootfs is a single READ-ONLY md0 ramdisk with no writable /private/var, so it aborts. Corroborated
+by "fixup-mobile-tmp could not create /private/var/mobile/tmp: Read-only file system" and RO
+socket-bind failures. This SUPERSEDES the older CS_KILLED/PAC/TXM framing (all solved) and is NOT
+the display coprocessor.
+FIX IN PROGRESS: give the guest a writable /var. Host-side APFS role change is refused (-69599);
+runtime `mount -uw /` is refused for the sealed System-role volume (APFS: "r/w update not
+allowed") and lands too late anyway. So the robust fix is a KERNEL patch to mount the md0 root
+read-write at boot (APFS ROSV forces RO for the System-role volume). See the dated 2026-09-08
+sections at the end for full detail.
+
+## Historical framing below (2026-09-07) -- SUPERSEDED, kept for the trail
+The 2026-09-07 sections that follow (check_np/shared-region, CS_KILLED, PAC, TXM selector-38) were
+each real walls at the time and are now ALL crossed; do not treat them as the current wall.
 
 ## (old framing kept for history)
 `shared_region_check_np` returns ENOMEM(12) -> launchd killed. Root cause is NOT

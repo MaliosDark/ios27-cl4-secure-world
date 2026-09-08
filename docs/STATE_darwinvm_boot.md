@@ -830,3 +830,40 @@ boots -> no RTKit endpoints -> no AFK -> no IOMFB -> no display surface -> Sprin
 4. Then RTKit mgmt handshake -> endpoints -> AFK -> IOMFB (display-info/surface/swap+vsync).
 This is a real multi-part emulation effort (the genuine final piece); userspace already boots
 fully (SpringBoard runs 18s) with DARWIN_NOPAC=1 + bootkc.md0.nopf4 + txm.sc + root-owned rootfs.
+
+## 2026-09-08 -- Sharpened reboot diagnosis (moderate io=0x484 boot, 1179x2556, EN console)
+Booted with a MODERATE IOKit mask (io=0x484, not 0xffffff) so the boot does not hang. Full
+userspace comes up; the exact reboot chain is now nailed down from launchd's own log:
+- 00:00:45  system/com.apple.logd[78]      SIGTRAP "sent by exc handler", ran 11.0s
+- 00:00:51  user/501/com.apple.SpringBoard[7]  SIGTRAP "sent by exc handler", ran 22.7s
+- 00:00:54  SpringBoard[88] (respawn)       SIGTRAP, ran 3.2s
+- 00:01:00  SpringBoard[89] (respawn)       SIGTRAP, ran 3.3s
+- 00:01:00  launchd <Critical>: "rebooting due to critical process crashes: SpringBoard"
+- 00:01:58  shutdown WAITING_ON_COALITIONS timeout -> hard reboot ->
+            panic "Halt/Restart Timed Out @IOPlatformExpert.cpp:900" (nested).
+So the reboot is launchd's 3-strike critical-process crash-loop policy on SpringBoard, NOT a
+kernel kill. First instance ran 22.7s (did real init), respawns die in ~3s (hit a now-persistent
+condition immediately).
+
+SURVIVORS (reach "running", never crash): com.apple.backboardd[44], driverkitd[56],
+iomfb_fdr_loader[76] (the IOMobileFramebuffer FDR/calibration loader), lockdownd, keybagd,
+identityservicesd, fairplayd, cameracaptured, etc. So backboardd (the display/render server) does
+NOT itself crash -- it is SpringBoard (its client) that aborts.
+
+NEW, IMPORTANT: com.apple.logd ALSO SIGTRAPs (via its own exc handler) at 11s. logd is not a UI
+process and needs no display. Two unrelated daemons self-aborting (caught EXC_* -> CrashReporter
+-> re-raise SIGTRAP) hints the trigger may be LOWER-LEVEL/shared, not purely "no display surface".
+Candidate shared causes to rule in/out: (a) DARWIN_NOPAC side effects on PAC-validating code
+paths; (b) a common framework op that asserts when a service/endpoint never answers; (c) genuinely
+the display for SpringBoard but logd is an independent second bug.
+
+BLOCKER for root-causing: the crash REASON is not on serial. Userspace os_log goes to logd (dead),
+the kernel prints nothing for these (they are caught in-process, not kernel-killed like the earlier
+AMFI cases), and the rootfs dmg is mounted READ-ONLY so ReportCrash writes nothing to disk. Need a
+guest-side signal: options are (1) enable internal/_PanicOnCrash so the kernel panics WITH the
+crashing backtrace on serial (launchd logged: "_PanicOnCrash key: InternalOnly not enabled in the
+current environment" for both backboardd and SpringBoard -- so flipping the build to "internal"
+would turn a SpringBoard crash into a serial panic w/ backtrace); (2) kernel-gdbstub break on the
+EL0 synchronous-exception / exception_triage path filtered to the SpringBoard proc, dump trapframe;
+(3) route userspace crash reports off-box. Getting this reason is the gate that decides whether the
+remaining work is the DCP display project or a cheaper shared-cause fix.

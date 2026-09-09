@@ -1381,3 +1381,136 @@ read-write; SpringBoard now launches and runs services for ~57-91s (was a ~20-31
 The last wall to a live SpringBoard is the path-specific /private/var write block above.
 firmware/bootkc.md0.rwroot holds: mountroot RW stub (load-bearing) + vfs_isrdonly=0 + mkdir/create
 0x9d-gate passes + no-firmlinks (the latter four are no-ops for /var but harmless). nopf4 intact.
+
+---
+
+## Step A: md0 volume-role inventory (host-side, no boot)
+
+Attached firmware/rootfs_with_cryptex.dmg (16 GB) read-only on the Mac and ran `diskutil apfs
+list`. The md0 APFS container has ONE volume only:
+
+  Container disk11  (UUID 3BB25890-5485-4861-BC46-E80E22EC7172), physical store = the dmg
+    Volume disk11s1  UUID 629F6C6E-7328-4CFA-9F27-3E5B5C298386
+      role   : System (APFS_VOL_ROLE_SYSTEM = 0x0001)
+      name   : RaveSeedD47OS (case-sensitive)
+      sealed : No
+      (vol-uuid matches the boot log "md0s1 vol-uuid: 629F6C6E-...")
+
+  NO Data (0x0040), NO Preboot (0x0010), NO Recovery, NO VM. No sibling volumes.
+
+Filesystem facts on the mounted System volume:
+- /private/var is fully populated (var/mobile, var/db, var/run drwxrwxr-x, var/tmp drwxrwxrwx,
+  var/folders, etc.). /private/var/mobile exists (drwx--x--x); /private/var/mobile/tmp does NOT
+  exist (that is exactly what fixup-mobile-tmp tries to create).
+- NO BSD restricted/sunlnk flags and NO com.apple.rootless xattr on /private/var or children
+  (only com.apple.provenance). So the /private/var EROFS is NOT a per-file rootless/SIP flag; it
+  is APFS's runtime "this is a System-role volume, /private/var belongs to the Data volume of the
+  group" enforcement -- and the Data volume is simply absent from the container.
+- No /usr/share/firmlinks file on the volume (consistent with the earlier no-firmlinks result).
+
+Conclusion: single System volume, Data missing => Step B (synthesize a Data volume and mount it
+RW at /private/var before fixup-mobile-tmp/SpringBoard). The System volume's superblock still
+advertises "system volume of a volume group" (the RO boot logged the ROSV shadow-fs-root path),
+so APFS expects a Data sibling that is not there. Next: determine whether the darwin-vm kernel
+mounts the Data volume of a group itself (ROSV/volume-group path) -- if so, adding a Data volume
+to the container with the matching group UUID is enough; otherwise a second ramdisk + kernel_mount
+after mountroot, or an early pre-SpringBoard mount, is required. Keeping nopf4 and rwroot as
+separate artifacts.
+
+---
+
+## Step B: Data volume synthesized; kernel does NOT auto-mount it (ROSV not firing)
+
+Worked on a clonefile COPY of the dmg (firmware/rootfs_data.dmg; original
+rootfs_with_cryptex.dmg untouched). Added a Data-role volume and populated the /var skeleton:
+  diskutil apfs addVolume disk11 APFS RaveSeedD47Data -role D   => disk11s2 (role 0x40 Data)
+  skeleton on Data root (= /private/var): mobile/tmp, mobile/Library/{Caches,Logs}, mobile/Media,
+    db, folders, run, tmp, root  (28 KB used; container had 1.4 GB free, fits).
+
+Empirical boot (nopf4, RO root, rootfs_data.dmg): the kernel mounts ONLY md0s1 (System). It does
+NOT mount md0s2 (Data) -- no "mounting volume RaveSeedD47Data" line -- and fixup-mobile-tmp still
+EROFS on /private/var/mobile/tmp (RO count unchanged).
+
+Root-cause facts (parsed both APSB volume superblocks directly from the dmg):
+- RaveSeedD47OS: role 0x0001 (System), vol_uuid 629f6c6e-..., apfs_volume_group_id = ALL ZEROS.
+- RaveSeedD47Data: role 0x0040 (Data), vol_uuid 8bb2833e-..., apfs_volume_group_id = ALL ZEROS.
+- APSB layout confirmed against the kernel (apfs_role @ +0x3C4 matches the ROSV code's
+  `ldrh w8,[x8,#0x3c4]; cmp #0x40`; apfs_volume_group_id @ +0x3F0; vol_uuid @ +0xF0; volname @ +0x2C0).
+- The ROSV "creating the shadow fs_root" path does NOT fire in this boot (RO or RW). Because
+  group_id is zero, the kernel never treats RaveSeedD47OS as the system volume OF A GROUP, so the
+  ROSV/shadow overlay (which on a real device makes /private/var writable via the Data volume) is
+  never engaged. The earlier-session ROSV logs were from a different image/config.
+
+Consequence: the /private/var write block is keyed on apfs_role == System (0x0001) alone, NOT on a
+volume group. Synthesizing a Data volume does not help by itself, and neither does pairing via
+group_id unless the full grouped-volume structure (matching group_id on both + incompat feature
+flags + a container volume-group record) is reconstructed AND the kernel is made to mount/overlay
+Data at /private/var. diskutil will not form the group ("No Volume Groups among 2 Volumes").
+
+Viable mechanisms now (pick one; kernel-side preferred per the plan):
+1. Kernel-side kernel_mount of md0s2 (Data, already in the container) at /private/var right after
+   apfs_vfsop_mountroot succeeds. Deterministic; needs a kernel_mount/vfs mount call, the md0s2
+   devvp, and the /private/var mount-point vnode, invoked before fixup-mobile-tmp (~16 s guest).
+   This is the concrete form of "Data mounted at /private/var" for THIS kernel (its ROSV/group
+   auto-mount does not run).
+2. Reconstruct the volume group (set a common non-zero apfs_volume_group_id on both APSBs + fix
+   Fletcher-64 checksums + any incompat flags) so the kernel's own group/ROSV path mounts Data.
+   Higher risk (blind binary superblock surgery; may need a container volume-group record).
+3. Step C: one targeted log at the exact EROFS(0x1e) return that fires for /private/var/mobile/tmp
+   (function + vp->v_mount) to pinpoint the role-based enforcer, then neutralize it.
+
+Artifacts kept separate: firmware/bootkc.md0.nopf4 (RO), firmware/bootkc.md0.rwroot (RW stub +
+no-op patches), firmware/rootfs_with_cryptex.dmg (original), firmware/rootfs_data.dmg (System +
+Data, /var skeleton populated).
+
+---
+
+## Step B breakthrough: volume group synthesized -> kernel ROSV shadow now fires
+
+Formed a real APFS volume group by editing both volume superblocks on the copy (no boot needed),
+then validated it host-side and in the guest.
+
+Surgery (firmware/rootfs_data.dmg, on the current/highest-xid APSB of each volume):
+- Set apfs_volume_group_id (APSB offset +0x3F0) = 52415645-5345-4544-4437-0000d47da7a0 on BOTH
+  RaveSeedD47OS (System, block 0x10050000) and RaveSeedD47Data (Data, block 0x1041d000).
+- Recomputed the APFS Fletcher-64 checksum (APSB offset +0x0, over bytes [8:4096]) for each block.
+  The algorithm was validated first against the two unmodified APSBs (calc == stored).
+- Result host-side: `diskutil apfs listVolumeGroups` now shows
+  "Volume Group 52415645-...-0000D47DA7A0" pairing disk11s1 (System) + disk11s2 (Data). So just a
+  matching group_id + fixed checksums forms a valid group; no incompat-feature flag was needed.
+
+Guest boot (nopf4, RO, grouped rootfs_data.dmg):
+- The kernel ROSV path now FIRES (it did not before the group existed):
+    handle_mount:963  md0s1 ROSV: apfs mounted RO and is the system volume of a volume group and
+                      mounted as the root fs: creating the shadow fs_root
+    fs_setup_shadow_fs_root_tree:3547  md0s1 Created the shadow_fs_root tree <ptr>
+- BUT the Data volume (RaveSeedD47Data / md0s2) is still NOT mounted, and fixup-mobile-tmp still
+  EROFS on /private/var/mobile/tmp. The shadow fs_root is the RO overlay of the sealed System
+  root; it does not by itself mount/stitch Data at /private/var.
+
+Why Data is not mounted -- userspace mount machinery is SKIPPED:
+The boot-task sequence (libignition / launchd boot-tasks) shows:
+    mount-phase-1        Skipping boot-task
+    data-protection      Skipping boot-task
+    restore-datapartition Doing boot task -> optional boot task not present
+    mount-phase-2        Skipping boot-task
+    init-with-data-volume Doing boot task
+    fixup-mobile-tmp     ... Read-only file system
+The mount-phase-1 / mount-phase-2 tasks are iOS's Data-volume mounter phases (implemented in
+/usr/libexec/MobileStorageMounter; the on-demand daemon is
+/System/Library/LaunchDaemons/com.apple.mobile.storage_mounter.plist). They are SKIPPED even with
+the group present -- almost certainly because rd=md0 puts the boot in a ramdisk/restore mode where
+MobileStorageMounter deliberately does not mount the normal data volume. There is no
+/private/etc/fstab on the System volume.
+
+Net: /private/var is writable ONLY once the Data volume (md0s2, RW) is mounted/stitched at
+/private/var. Remaining levers to make that happen (pick one):
+  1. Make MobileStorageMounter run mount-phase-1/2 (find and satisfy the skip condition, or force
+     it) so iOS mounts Data itself -- cleanest, pure userspace/config once understood.
+  2. Kernel-side kernel_mount of md0s2 at /private/var right after apfs_vfsop_mountroot, before
+     fixup-mobile-tmp (~16 s). Deterministic; needs the mount call + md0s2 devvp + /private/var vp.
+  3. An early LaunchDaemon (RunAtLoad, ordered before fixup) that runs MobileStorageMounter /
+     mount_apfs on md0s2 -> /private/var.
+
+Artifacts (all separate): bootkc.md0.nopf4 (RO), bootkc.md0.rwroot (RW stub), rootfs_with_cryptex.dmg
+(original single-System), rootfs_data.dmg (System+Data, group 52415645-..., /var skeleton populated).

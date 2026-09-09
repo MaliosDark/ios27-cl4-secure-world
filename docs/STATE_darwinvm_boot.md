@@ -1587,3 +1587,58 @@ Options to proceed (need a decision):
 
 Artifacts: bootkc.md0.datavol (rwroot base, firmlinks reverted ON), rootfs_data.dmg (System+Data,
 group 52415645-..., /var skeleton), nopf4/rwroot/rootfs_with_cryptex.dmg unchanged.
+
+---
+
+## Lever 1 + userspace helper (2026-09-09): /dev/md0s2 PROVEN to exist; blocker is root privilege
+
+Per directive: parked kernel_mount (stripped symbols), pursued lever 1 (why mount-phase skips) +
+a userspace mount helper. Worked on firmware/rootfs_data.dmg (System+Data group) + bootkc.md0.datavol.
+
+Why mount-phase-1/2 skip (from disassembling /sbin/launchd, arm64e, with markup):
+- Boot-tasks are launchd-INTERNAL (registered by hardcoded name at 0x1000462e8+; run via
+  0x100044ba4 which looks each up in a "Boot" config dict at [0x100087078] = config[+0x688]["Boot"]
+  and calls the skip-decision 0x100044c98, then runs it via 0x100044f0c which stats a "Program"
+  path -> "optional boot task not present" if missing).
+- The skip-decision checks per-task keys: PerformInRestore, LimitLoadFromBootModes,
+  LimitLoadToBootingExternalVolume ("Booting non-external volume, skipping boot-task"),
+  PerformAfterUserspaceReboot, PerformInBaseSystem. mount-phase is gated to restore / external-
+  volume boots; our rd=md0 local ramdisk is neither, so it skips -- effectively "hard-wired off
+  for md0", i.e. the "do not fight it, use a helper" case.
+- The boot-task "Boot" config source is not an editable on-disk plist (launchd.plist top keys are
+  AppExtensions/AppRemovalServices/LaunchDaemons/Symlinks/SystemLibraryTreeState/VersionNumber; no
+  "Boot"). So un-skipping mount-phase would require patching launchd, not editing a file.
+
+Userspace helper -- what works and the wall:
+- AMFI is NON-ENFORCING in this boot ("AMFI: Launch Constraint Violation (not enforcing)",
+  "Booted in a VM"), and launchd ACCEPTS an edited launchd.plist cache despite the stale
+  launchd.plist.sig. So the signed cache is not a hard gate here.
+- launchd loads a daemon only if BOTH its launchd.plist "LaunchDaemons" cache entry AND the actual
+  /System/Library/LaunchDaemons/<x>.plist file exist; the file must be root:wheel or launchd
+  rejects it: "Path had bad ownership/permissions (error 122)". Host mounts the dmg noowners
+  (everything displays 501:20), and NEW files land 501:20 on-disk -> error 122.
+- OWNERSHIP TRICK (no sudo): overwriting an EXISTING root:wheel daemon plist IN PLACE
+  (cat mydaemon > existing.plist, truncate-in-place) PRESERVES on-disk root:wheel on the noowners
+  mount. Repurposing com.apple.mobile.storage_mounter.plist (file + cache entry) this way made
+  launchd accept and SPAWN a custom RunAtLoad daemon (com.apple.datavol-mount) with NO ownership
+  error. This is a reusable way to inject a root-owned daemon without sudo.
+- The daemon ran `/sbin/mount_apfs /dev/md0s2 /private/var` and got:
+      mount_apfs: volume could not be mounted: Operation not permitted   (EPERM)
+  EPERM (not ENODEV) => /dev/md0s2 EXISTS and is reachable. **This PROVES the second volume is
+  published to XNU as a device** (the requirement before any mount). The mount is refused on
+  privilege: in THIS boot EVERY service (SpringBoard, backboardd, our daemon) runs in the
+  user/501 domain as uid 501, and mount() requires root (or the MobileStorageMounter mount
+  entitlements). POSIXSpawnType System + UserName root made launchd keep the job in the xpcproxy
+  trampoline (on-demand) so mount_apfs did not even exec; Adaptive execs it but as 501 -> EPERM.
+
+Net: the helper reaches the exact mount and proves md0s2, but cannot gain root as a general
+LaunchDaemon (uid 501 domain), and general daemons run AFTER the boot-task phase (so after
+fixup-mobile-tmp at ~16s regardless). Root exists only in launchd's internal boot-task phase and
+the kernel. Remaining options: (a) make MobileStorageMounter (which HAS the mount entitlements)
+perform the mount -- needs the launchd "Boot" config / a launchd patch; (b) kernel exec-after-
+mountroot of the helper (still needs XNU symbols, the parked item); (c) get a boot-task-phase
+(root) hook. SpringBoard now runs up to ~10s per instance in some boots but still SIGTRAPs; the
+Data mount, when it lands with the pre-populated /private/var skeleton, is the expected unblock.
+
+Artifacts unchanged/clean: bootkc.md0.datavol (rwroot base, firmlinks ON), rootfs_data.dmg
+(System+Data group 52415645-..., /var skeleton), nopf4/rwroot/rootfs_with_cryptex.dmg intact.

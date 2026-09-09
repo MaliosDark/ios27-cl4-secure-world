@@ -216,3 +216,51 @@ the mailbox HELLO (the rest of Stage A). Reproduce:
   DARWIN_NOPAC=1 DARWIN_AIC=1 DARWIN_DART=1 DARWIN_DISP=all DARWIN_RTKIT=1 \
   DARWIN_FB=1 DARWIN_DCPFW=firmware/dcpfw DCP_NO_SCANOUT=1 qemu-... \
   -bootkc firmware/bootkc.md0.rwlivefs -ramdisk firmware/rootfs_norole.dmg ...
+
+## Stage A progress, iteration 2 (this session)
+
+Built a real fix for the dcpfw panic and ran the decisive experiments. Net result:
+the DCP firmware / PMGR / the panic were NOT what blocks RTBuddy from booting the
+coprocessor. The blocker is deeper and sits in the IOMFB init chain.
+
+Fix built (null-guard, in the copy bootkc.md0.dcp): the DARWIN_DCPFW panic was a
+kernel data abort at static pc 0xb03078c inside a memorystatus-adjacent function
+(0xb030680) iterating a one-element global list (count at 0xb63e05b8, array pointer
+at 0xb6b26f0, stride 72). Under lldb the array pointer is valid; under the free run
+it reads null while count is already 1 (a non-atomic array-grow window the dcpfw
+region registration exposes). Since we boot with DARWIN_NOPAC=1, the loop's PAC
+sequence (eor/tst/b.eq/movk at 0xb03077c..0xb030788) is inert, so it was replaced
+in place with a null guard: "cbz x8, 0xb0307a4" + 3 nops, i.e. if the array pointer
+is null, skip the loop and return cleanly instead of dereferencing null. With this
+patch the DARWIN_DCPFW boot no longer panics and reaches fixup / launchd normally.
+The patch is inert without DARWIN_DCPFW (count 0, loop skipped), so goals 1/2 are
+unaffected; bootkc.md0.rwlivefs is untouched.
+
+Decisive experiments (each one full boot, DCP_NO_SCANOUT=1 to silence the painter):
+- no firmware, no PMGR:            RTBuddy(DCP) start() runs, then zero mailbox MMIO.
+- no firmware, DARWIN_PMGR=1:      same, zero mailbox MMIO, zero PMGR writes.
+- DARWIN_DCPFW + PMGR (unpatched): kernel data abort 0xb03078c before launchd.
+- DARWIN_DCPFW + PMGR + null-guard: boots fine, but RTBuddy(DCP) STILL does zero
+  mailbox MMIO through guest 5 min. Only log line is "RTBuddy(DCP): start()".
+
+Conclusion: RTBuddy(DCP)::start() attaches but never proceeds to power on / boot the
+coprocessor (no CPU_CONTROL write, no HELLO handshake), regardless of firmware or
+power. The coprocessor boot is deferred and its trigger never fires. The most likely
+trigger is IOMFB completing init and requesting the DCP power on, and IOMFB does not
+complete: the userspace IOMFB_FDR_Loader (loads the panel Factory Data Record /
+calibration IOMFB needs) runs ~126 s and exits(1) every boot. So the next brick is
+the IOMFB init chain, not RTBuddy itself:
+  IOMFB_FDR_Loader exit(1)  ->  IOMFB never finishes init  ->  never asks the DCP to
+  power on  ->  RTBuddy never boots the coprocessor  ->  no mailbox, no frames.
+
+Next steps for this brick:
+1. Find why IOMFB_FDR_Loader exits(1): what FDR source it reads (effaceable storage /
+   nvram / a calibration file or partition) and whether that backing exists in the VM.
+   Provide or stub the FDR so the loader succeeds, OR make IOMFB not require it.
+2. If IOMFB still will not request the DCP after that, drive the coprocessor boot from
+   the emulator side (self-announce is already available via DARWIN_RTKIT_ANNOUNCE but
+   the guest did not respond, because RTBuddy has not set up the mailbox RX/IRQ yet;
+   that only happens once RTBuddy actually boots the coprocessor). So (1) is the gate.
+Only after the mailbox handshake starts do Stages B..E (AFK, IOMFB RPC, swap, present)
+become reachable. This remains a large, multi-brick effort with unknown iOS-27 protocol
+layouts past the handshake.

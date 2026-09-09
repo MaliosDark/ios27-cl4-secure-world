@@ -168,3 +168,51 @@ shortcut is proven dead. Everything needed to proceed is captured above and in
 the cached Asahi source; the method is the same one that solved goals 1 and 2:
 capture real guest traffic, decode against this reference, implement, test one
 hypothesis per boot.
+
+## Stage A progress (this session)
+
+Advanced Stage A one concrete brick, beyond the prior FINDINGS restore-ramdisk
+state (where DARWIN_DCPFW + DCP_REGION "changed nothing" because RTBuddy never
+instantiated). On the full-OS boot RTBuddy(DCP) does instantiate, so wiring the
+firmware now engages the guest DCP code path.
+
+Found the required runtime knobs (they were never passed in the goals 1/2 boots):
+- DARWIN_DCPFW=firmware/dcpfw loads the 16.7 MB DCP firmware into a carved region
+  and, in xnuboot_sptm.c, writes both region-base and region-size into the DT node
+  arm-io/dcp/iop-dcp-nub (the success branch fires: "dcp firmware: 16695296 bytes
+  at 0x104F947C000, region 0x6000000"). This is what iBoot does.
+- DARWIN_PMGR maps the PMGR power/clock domains (30 regions) with auto-ack of
+  power-state target->actual. The DCP firmware file (firmware/dcpfw) and the raw
+  IPSW firmware (dcp-fw/t8140dcp.im4p, t8140dcp_restore.im4p) are already present.
+- DARWIN_RTKIT (already used) maps the ASC mailbox at reg[0] 0x412E00000+0x88000
+  and attaches apple_dcp.c. DARWIN_RTKIT / DARWIN_ASC / DARWIN_RTKIT_ANS are
+  mutually exclusive (else-if in darwin.c). We keep DARWIN_RTKIT for the DCP.
+
+New blocker pinned (next brick): with DARWIN_DCPFW enabled the guest panics early,
+during IOKit matching, right after "AppleOLYHAL::start ... found wlan-olyhal-abort
+boot-arg, bailing":
+    panic: Kernel data abort at pc 0xfffffff02b03078c, far 0x8
+    (kernelcache slide 0x20000000; static pc 0xb03078c; Darwin 27.0.0
+     xnu-13432.2.10 RELEASE_ARM64_T8140).
+The faulting code is a loop that re-reads a global array pointer each iteration:
+    w19 = *(u32*)0xb63e05b8            ; element count, = 1 with dcpfw
+    x8  = *(u64*)0xb6b26f0             ; array base pointer, element stride 72
+    x10 = x8 + idx*72 ; ldr x1,[x10+8] ; FAULT when x8 == 0
+    call 0xab1f6b0(x10+0x44, x1)
+Under lldb (paused -S boot) at the loop entry the array pointer is a VALID heap
+address (0xffffffea...) and count is 1; under the free-running boot the same site
+faults with x8 = 0. So the function is called multiple times during boot to
+iterate this one-element list, and one call catches the array pointer transiently
+null while the count already reads 1 -- an init-order / concurrency window that
+the dcpfw-region registration (count 0 -> 1) exposes under the free-run timing.
+This does not happen without DARWIN_DCPFW (goals 1/2 boots, count 0, loop skipped).
+
+Next steps for this brick: identify the list (the function enclosing 0xb030700,
+the per-element callee 0xab1f6b0, and what the dcpfw region registers into it),
+then either order the registration so the array store precedes the count
+increment as the iterator sees it, or provide the missing backing so the entry is
+consistent. Only after this passes can RTBuddy proceed toward CPU_CONTROL RUN and
+the mailbox HELLO (the rest of Stage A). Reproduce:
+  DARWIN_NOPAC=1 DARWIN_AIC=1 DARWIN_DART=1 DARWIN_DISP=all DARWIN_RTKIT=1 \
+  DARWIN_FB=1 DARWIN_DCPFW=firmware/dcpfw DCP_NO_SCANOUT=1 qemu-... \
+  -bootkc firmware/bootkc.md0.rwlivefs -ramdisk firmware/rootfs_norole.dmg ...

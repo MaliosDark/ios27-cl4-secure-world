@@ -1690,3 +1690,40 @@ Remaining options (all outside userspace, i.e. what was parked):
   - Add a real block device to darwin-vm/qemu so the boot is a normal on-disk boot (not rd=md0
      restore mode) -> mount-phase-1/2 would then run /sbin/mount -P as root by Apple's own path.
 rootfs_data.dmg restored clean (System+Data group + /var skeleton, no code modifications).
+
+---
+
+## BREAKTHROUGH: trust-cached patched launchd runs -> mount-phase runs `mount -P` as ROOT
+
+The code-signing wall is BEATEN by feeding AMFI the patched launchd's cdhash via the static trust
+cache (build_tc.py / ramdisk.tc), instead of fighting AMFI:
+1. Size-neutral patched launchd (PerformInRestore added to mount-phase-1/2 in the embedded
+   boot-task plist), adhoc-signed. cdhash (SHA256, hashType 2) = cb9e51409182d1f8a0cc149c0dde27cc03b9ce58.
+2. Extracted the 4187 existing cdhashes from firmware/ramdisk.tc (v1 TC: 24-byte header +
+   4187 * 22-byte entries {cdhash[20], hashType=2, flags=0}), appended the launchd cdhash,
+   rebuilt with build_tc.py -> firmware/ramdisk_dv.tc (4188 entries, 92160 bytes).
+3. Booted bootkc.md0.datavol + rootfs_data.dmg (patched launchd in place, root:wheel preserved) +
+   -tc firmware/ramdisk_dv.tc.
+
+Result: init LIVES (no "fatal signal 9" -- the trust cache accepted the patched cdhash), and BOTH
+  mount-phase-1: Doing boot task   -> /sbin/mount -P 1   (runs as ROOT)
+  mount-phase-2: Doing boot task   -> /sbin/mount -P 2   (runs as ROOT)
+now execute instead of skipping. TXM/AMFI does NOT reject the trust-cached pid-1 module. So the
+"stop userspace, do qemu disk" fallback is NOT triggered -- userspace path stays open.
+
+NEW blocker (past the privilege/code-signing wall): Apple's own `mount -P` runs as root but cannot
+find our synthetic Data volume:
+  mount: data volume missing, but not required in env: 1      (phase 1)
+  mount: mount: missing data volume                            (phase 2)
+So /private/var is still not mounted and fixup-mobile-tmp still EROFS. The Data volume md0s2 EXISTS
+(a prior mount_apfs reached it) and diskutil recognises the System+Data group, but `mount -P`'s
+data-volume DISCOVERY (kernel volume-group query) does not resolve md0s2. Likely the synthetic
+group needs more than a matching apfs_volume_group_id on both APSBs (e.g. a container volume-group
+object / the system volume's data-volume reference / IOMedia publication of the unmounted volume) for
+`mount -P` to see it. Next: disassemble /sbin/mount's "missing data volume" path to learn exactly
+how it enumerates the data volume, and satisfy that (data-only, no code-signing issue now that the
+launchd/trust-cache mechanism is proven and reusable for any Apple mount path we need).
+
+Reusable mechanism proven this session: patch a system binary size-neutrally -> adhoc sign ->
+add its cdhash to ramdisk.tc via build_tc.py -> AMFI accepts it. This unlocks controlled userspace
+patches without cs_enforcement_disable (which panics).

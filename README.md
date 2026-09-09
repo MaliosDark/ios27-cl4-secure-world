@@ -75,8 +75,9 @@ kernel boot toward two goals:
 - **A full OS.** Boot from the actual iOS root filesystem (not just the restore
   ramdisk), mount it, and reach `launchd`.
 
-Both are working today; the remaining gate is a firmware component the user supplies
-(the SystemOS **Cryptex**, which carries the dyld shared cache).
+Both are working today. Full userspace boots (the SystemOS **Cryptex** dyld shared cache
+is supplied and injected) and SpringBoard launches; the current gate is a writable
+`/private/var` (see [Status](#status)).
 
 ---
 

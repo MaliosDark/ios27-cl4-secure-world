@@ -1785,3 +1785,37 @@ NOT kernel_mount, NOT another image, NOT NVMe/qemu. It is the last piece for goa
 Reusable wins this session (all frozen-artifact-safe): trust-cache-any-Apple-binary-as-root in the
 boot-task phase; the mount-phase-1/2 embedded-plist retarget + cdhash-in-ramdisk.tc recipe.
 Criterion unchanged: fixup-mobile-tmp with no EROFS.
+
+---
+
+## [GOAL 1] BREAKTHROUGH: apfs has its OWN read-only state (not the VFS mnt_flag)
+
+Pinned the actual EROFS with lldb (deterministic script: break apfs_vnop_mkdir 0xfffffff02a8b6868,
+continue to fixup's first mkdir of /private/var/mobile/tmp at guest ~16.7s, finish, read x0):
+    apfs_vnop_mkdir RETURN x0 = 0x1e (EROFS)
+Caller chain (static): apfs_vnop_mkdir(0xa8b6868) <- 0xacccaac(VNOP wrapper) <- 0xace5c14 <-
+0xace5f70 <- 0xb170a64 <- 0xac65890 <- 0xaa63574 (VFS mkdir syscall path).
+
+Key facts that invalidate every earlier theory:
+- root IS RW: mount flags 0x1480d000 (rwroot stub cleared MNT_RDONLY at mount+0x70).
+- volume is NOT sealed, NOT encrypted (incompat=0x8 NORM_INSENSITIVE, fs_flags=0x1), role clearable.
+- yet apfs_vnop_mkdir still returns EROFS -- from DEEP in the create/transaction path
+  (0xa8b6eb0 -> deeper), NOT the [node+0x9d]&0xc0 gate I patched, NOT VFS mnt_flag.
+
+Root cause (from apfs strings + the pin): APFS keeps its OWN read-only state independent of the VFS
+mnt_flag. Anchor: apfs_vfsop_mount logs "vfs mount structure specifies read only but apfs mount
+structure doesn't" (0xfffffff00a8e843c) -- a consistency check proving apfs has a separate RO
+indicator. The apfs write gate is the [x+0x9d] & 0xc0 (bits 6,7) flag: apfs_vnop_mkdir /
+apfs_vnop_create each test it (I skipped THOSE gates), but the deep write/transaction path
+re-checks the SAME apfs-RO state and returns EROFS. ("nx_buf_bread: write not allowed!" 0xa8691ec
+is a lower panic, not our path -- our EROFS is the graceful apfs-RO reject above it.)
+
+Consequence: the rwroot stub fixed the WRONG flag. The real fix for goal 1 = make APFS itself
+consider the volume writable -- clear apfs's internal RO at mount (the source that sets [x+0x9d]
+bits 0xc0 / the apfs mount-structure RO), OR mount the volume RW at the apfs level (patch the
+apfs_vfsop_mount mount-mode decision so apfs does not set its RO state for the root volume). Then
+mkdir's deep write path allows the create. This is a bootkc patch (copy), string-anchored
+(apfs_vfsop_mount + the [x+0x9d] flag), and directly testable: criterion fixup-mobile-tmp no EROFS.
+
+Reusable: deterministic lldb pin recipe (break addr; continue; bt; breakpoint disable; finish;
+p/x $x0) works over the gdbstub where Python breakpoint callbacks do NOT in this lldb 20.1.4.

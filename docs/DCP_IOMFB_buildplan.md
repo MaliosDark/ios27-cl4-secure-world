@@ -391,3 +391,46 @@ Net: goal 3 is a fully mapped, multi-session frontier. This session advanced Sta
 the display stack, RTBuddy attaches successfully, and the one remaining kernel-side gate
 is that the DCP coprocessor is never brought up because qemu-sptm does not pre-boot it as
 iBoot would. That is the concrete thing to build next.
+
+## Stage A/B iteration 6 (this session): the DCP boot is governed by IOKit power-plane properties
+
+Ruled out the remaining shortcuts and pinned the exact machinery. Re-tested a proactive
+RTKit HELLO with the full config (bootkc.md0.dcp + firmware + PMGR + null-guard,
+DARWIN_RTKIT_ANNOUNCE): HELLO is sent but the guest never replies, and the ASC mailbox is
+never touched in 12+ minutes, so RTBuddy's mailbox bring-up genuinely never runs (not just
+late). RTBuddyV2::start is a very large function (its ret is more than 0x800 bytes past the
+entry) and returns success; the coprocessor bring-up is not inline-and-skipped but sits in
+the power-managed path.
+
+The iop-dcp-nub / dcp DT node carries the power-management properties that govern this:
+  join-power-plane, remote-power-state, require-force-wakeup, cold-boot-after-hibernate,
+  no-firmware-service, region-base, region-size, dcp-controls-reg-index,
+  dcp-controls-value-on/off, first-frame-response-threshold.
+So the DCP is a join-power-plane device whose bring-up requires a force-wakeup /
+power-state transition (require-force-wakeup, remote-power-state). Nothing issues that
+transition in this headless ramdisk boot, so RTBuddyV2::setPowerState-to-on never runs.
+
+State of the levers tried this session (all dead-ended or deferred, documented above):
+  firmware load + DT wiring (DARWIN_DCPFW): works, but only fixes the carve panic.
+  PMGR (DARWIN_PMGR): guest never touches it; boot fine without it.
+  proactive HELLO (DARWIN_RTKIT_ANNOUNCE): no guest response, mailbox RX not set up.
+  hv_vmm_present / AVP: AMFI-only, red herring for the DCP.
+  locate the ASC CPU_CONTROL-RUN write to patch a direct boot: not a str [x,#0x44];
+    it goes through a register abstraction, not statically locatable by that pattern.
+
+What cracking this brick actually requires (dedicated deep RE, next effort):
+1. Find RTBuddyV2::setPowerState via the class vtable (read [this] on a live DCP instance,
+   index the IOService setPowerState slot for this XNU build) and confirm it is never
+   called on the DCP; then find what should call it (the power-plane parent / client).
+2. Either drive that power-state transition (model the join-power-plane / force-wakeup the
+   DCP expects, or provide the display-client power request), or patch RTBuddyV2 to run its
+   coprocessor bring-up unconditionally in start (requires locating the bring-up method
+   behind the register abstraction and its preconditions).
+3. Once the mailbox handshake starts, Stages B..E (AFK, IOMFB RPC, swap, DART, present) with
+   unknown iOS-27 layouts remain.
+
+Honest status: goal 3 is a fully mapped, Asahi-scale, multi-session frontier. This session
+took Stage A from the restore-ramdisk dead end to a precise, root-caused model of a full-OS
+boot where the entire display stack attaches and the single kernel-side gate is the DCP
+coprocessor's power-plane bring-up never being triggered. That is the concrete thing a
+dedicated next effort must build.

@@ -1,12 +1,21 @@
 # iOS 27 Secure-World Bring-up on an Intel Mac
 
-> **CURRENT STATE (2026-09-08):** Full iOS 27 userspace now boots. Hundreds of daemons run and
-> SpringBoard spawns and runs (about 18 s). The current wall is that the rootfs is a READ-ONLY
-> ramdisk with no writable /private/var, so SpringBoard aborts in BaseBoardUI (BSUIMappedImageCache).
-> This is NOT the DCP/display and NOT CS_KILLED; both were crossed. Fix in flight: a kernel patch to
-> mount the md0 root read-write (XNU sets MNT_RDONLY, not APFS). Live source of truth:
-> STATE_darwinvm_boot.md and board.html in ios27-cl4-secure-world. Text below this banner predates
-> this and is kept for history.
+> **CURRENT STATE (2026-09-09):** Full iOS 27 userspace boots. Hundreds of daemons run and
+> SpringBoard now launches and runs for about 60-90 s of guest time (it used to crash-loop at
+> ~20-31 s). The libSystem / dyld shared cache / Cryptex stage is long crossed; so are DCP/display
+> and CS_KILLED. The remaining wall is a writable **/private/var**: on a real device /private/var is
+> a separate read-write **Data** volume, and this boot mounted only the read-only **System** volume,
+> so writes to /private/var fail EROFS -- fixup-mobile-tmp and SpringBoard's BaseBoardUI temp cache
+> (BSUIMappedImageCache) among them.
+>
+> Progress toward that: an in-kernel `mount -uw /` (clear MNT_RDONLY in apfs_vfsop_mountroot) took
+> SpringBoard from ~20 s to ~60-90 s. A **Data** volume was then synthesized and paired into a real
+> APFS **volume group** (matching apfs_volume_group_id + Fletcher-64 surgery), which makes the
+> kernel's ROSV shadow-fs-root path fire. The last piece is getting the Data volume actually mounted
+> at /private/var -- pursued now via lever 1 (MobileStorageMounter mount-phase) plus a small
+> userspace mount helper. Kernel-side `kernel_mount` injection is PARKED (XNU-core mount symbols are
+> stripped in this release kernelcache). Live source of truth: `docs/STATE_darwinvm_boot.md`. Text
+> below this banner predates this and is kept for history.
 
 
 > **About:** Booting iOS 27 to its real root filesystem on an Intel Mac via
@@ -29,9 +38,10 @@ and lighting the **DCP display panel** with the live boot log along the way.
 
 <p align="center"><em>The emulated panel with the live English kernel console (DCP LINK UP, real driver init, APFS mountroot). SpringBoard has not rendered yet -- see the board above for the current wall.</em></p>
 
-> **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root**, and
-> starts `launchd`. The current frontier is the **dyld shared cache** (shipped in the
-> `Cryptex1,SystemOS`) so `launchd` can load `libSystem`. See [Status](#status).
+> **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root**, starts
+> `launchd`, runs hundreds of daemons, and **launches SpringBoard** (it survives ~60-90 s). The
+> current frontier is a writable **/private/var**: only the read-only System volume is mounted, so
+> the Data-volume subtree is unwritable. See [Status](#status).
 
 ---
 
@@ -151,7 +161,8 @@ sequenceDiagram
         D->>P: paint device id, progress ring, console, panic state
     end
     X->>X: exec /sbin/launchd
-    Note over X,P: launchd needs libSystem then dyld shared cache (Cryptex)
+    Note over X,P: launchd + hundreds of daemons run; SpringBoard launches (~60-90 s)
+    Note over X,P: wall: /private/var not writable (Data volume not mounted)
 ```
 
 ---
@@ -169,10 +180,10 @@ flowchart LR
 
     A -->|"bootkc.md0 + dtree_ios<br/>(real rootfs as md0)"| BB["Boot B: Full OS"]
     BB --> BB1["APFS mountroot ok"]
-    BB1 --> BB2["/sbin/launchd starts ok"]
-    BB2 --> BB3{"libSystem?"}
-    BB3 -->|Cryptex injected| BB4([continue userspace])
-    BB3 -->|missing| BB5[["blocked: no dyld cache"]]
+    BB1 --> BB2["launchd + daemons; SpringBoard launches"]
+    BB2 --> BB3{"/private/var writable?"}
+    BB3 -->|Data volume mounted| BB4([SpringBoard holds])
+    BB3 -->|System-only, Data missing| BB5[["wall: /private/var EROFS"]]
 
     classDef ok fill:#14351f,stroke:#3cb56c,color:#dff6e8;
     classDef blk fill:#3b1f1f,stroke:#b5533c,color:#f6e2e2;
@@ -226,15 +237,31 @@ ultimately, an AGX GPU model for SpringBoard-level UI.
 | Full rootfs boot to APFS `mountroot` | done |
 | `md0` >4 GB truncation fix | done |
 | `/sbin/launchd` starts | done |
-| `libSystem` / dyld shared cache | blocked: needs SystemOS **Cryptex** |
-| IOMFB real-surface decode | in progress |
+| `libSystem` / dyld shared cache (Cryptex) | done |
+| Full userspace: hundreds of daemons | done |
+| **SpringBoard launches and runs (~60-90 s)** | done |
+| Root mounted read-write in-kernel (`mount -uw /`) | done |
+| Data volume synthesized + APFS volume group formed | done |
+| Kernel ROSV shadow-fs-root fires | done |
+| **Writable `/private/var` (mount Data volume)** | in progress -- current wall |
+| IOMFB real-surface decode | later |
 | AGX GPU (SpringBoard UI) | not emulated |
 
-**Immediate blocker.** The rootfs (`094-13182-141`) is the *split* SystemOS: it has
-**no** `dyld_shared_cache` and no regular `libSystem.B.dylib`. Those live in the
-`Cryptex1,SystemOS` (`094-13150-145`, ~2.3 GB), which the user decrypts and injects at
-`/private/preboot/Cryptexes/OS` via [`inject_cryptex.sh`](scripts/inject_cryptex.sh).
-See [`docs/NEXT-STEP-cryptex.md`](docs/NEXT-STEP-cryptex.md).
+**Immediate blocker: writable `/private/var`.** Full userspace boots and SpringBoard launches
+and runs ~60-90 s, then aborts because `/private/var` is not writable. On a real device
+`/private/var` is a separate read-write **Data** volume in the same APFS volume group as the
+read-only **System** volume; this boot loaded only the System volume, so `/private/var` writes
+return EROFS (fixup-mobile-tmp and SpringBoard's BaseBoardUI `BSUIMappedImageCache` among them).
+
+Done so far: an in-kernel `mount -uw /` (clearing `MNT_RDONLY` in `apfs_vfsop_mountroot`) extended
+SpringBoard from ~20 s to ~60-90 s; a **Data** volume was synthesized and paired into a real APFS
+**volume group** (matching `apfs_volume_group_id` + Fletcher-64 checksum surgery), which makes the
+kernel's ROSV shadow-fs-root path fire. The remaining piece is mounting that Data volume at
+`/private/var`, pursued via `MobileStorageMounter`'s mount phases plus a small userspace mount
+helper. A kernel-side `kernel_mount` injection is parked because XNU-core mount symbols are stripped
+in this release kernelcache. The earlier Cryptex / dyld-shared-cache stage is long crossed; the
+Cryptex is injected at `/private/preboot/Cryptexes/OS` via
+[`inject_cryptex.sh`](scripts/inject_cryptex.sh). Full detail: [`docs/STATE_darwinvm_boot.md`](docs/STATE_darwinvm_boot.md).
 
 ---
 
@@ -282,7 +309,9 @@ timeline
     Interactive shell : panel + keyboard over UART (bash-5.3#)
     Full OS mounts : dram-size fix then md0 >4GB truncation fix
     launchd starts : real rootfs, PID 1 running
-    Frontier : dyld shared cache (Cryptex) then IOMFB decode
+    Userspace up : hundreds of daemons, Cryptex/dyld cache loaded
+    SpringBoard : launches and runs ~60-90 s
+    Frontier : writable /private/var (mount the Data volume)
 ```
 
 Full narrative: [`docs/RESUME-secure-world.md`](docs/RESUME-secure-world.md)

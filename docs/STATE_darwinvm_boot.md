@@ -1,7 +1,18 @@
 # darwin-vm iOS 27 boot -- LIVE STATE (read this first)
 
 One-screen "where are we / what's been tried" so we never re-litigate settled points.
-Last updated: 2026-09-08.
+Last updated: 2026-09-09.
+
+### TL;DR (2026-09-09), newest work is at the BOTTOM of this file
+Full iOS 27 userspace boots; SpringBoard launches and runs ~60-90 s of guest time (was ~20-31 s).
+An in-kernel `mount -uw /` (clear MNT_RDONLY in apfs_vfsop_mountroot; firmware/bootkc.md0.rwroot)
+extended it. Root cause of the remaining wall: /private/var is the read-write DATA volume on a real
+device, and this boot mounted only the read-only SYSTEM volume, so /private/var writes EROFS. A DATA
+volume was synthesized and paired into a real APFS volume group (firmware/rootfs_data.dmg;
+apfs_volume_group_id + Fletcher-64 surgery), which makes the kernel ROSV shadow-fs-root path fire --
+but the DATA volume is still not mounted at /private/var. LEVER 2 (kernel_mount md0s2) is PARKED
+(XNU-core mount symbols stripped in this release KC). Active path: LEVER 1 (MobileStorageMounter
+mount-phase) + a small userspace mount helper. See the newest sections at the end of this file.
 
 Target: iOS 27 (iPhone17,3 / t8140 / d47ap, build 24A5430a) under jprx/darwin-vm +
 qemu-sptm on an Intel Mac. Goal: reach SpringBoard.
@@ -15,11 +26,21 @@ qemu-sptm on an Intel Mac. Goal: reach SpringBoard.
 - [x] dyld shared cache MAPS           (maxSlide reverted to valid; Wall #2 crossed)
 - [x] launchd survives + FULL USERSPACE: hundreds of daemons launch AND RUN their code
 - [x] CS_KILLED / PAC / TXM selector-38 all SOLVED (DARWIN_NOPAC=1 + txm.sc + bootkc.md0.nopf4)
-- [x] SpringBoard SPAWNS and RUNS (~15-22s first instance, pid varies e.g. [6]/[89]/[91])
-- [ ] SpringBoard SURVIVES  <-- CURRENT WALL: it aborts in BaseBoardUI on the READ-ONLY rootfs
+- [x] SpringBoard SPAWNS and RUNS -- now ~60-90s of guest time after the in-kernel root-RW patch
+      (was ~15-31s); still aborts (SIGTRAP) before rendering UI
+- [x] Root mounted READ-WRITE in-kernel (clear MNT_RDONLY in apfs_vfsop_mountroot; bootkc.md0.rwroot)
+- [x] DATA volume synthesized + real APFS volume group formed -> kernel ROSV shadow-fs-root fires
+- [ ] DATA volume MOUNTED at /private/var  <-- CURRENT WALL (System-only boot; /private/var EROFS)
+- [ ] SpringBoard SURVIVES past ~90s (blocked on writable /private/var above)
 - [ ] usable UI (needs SpringBoard alive; display/DCP is a LATER wall, not the current one)
+- [~] LEVER 2 kernel_mount md0s2 PARKED (XNU mount symbols stripped); LEVER 1 + helper active
 
-## CURRENT WALL (root-caused 2026-09-08) -- read-only rootfs, NOT CS_KILLED, NOT the DCP
+## WALL as root-caused 2026-09-08 (still the mechanism; refined 2026-09-09 below)
+NOTE (2026-09-09): the read-only-rootfs framing below is correct but has since been refined. Root
+is now mounted READ-WRITE in-kernel and SpringBoard reaches ~60-90s, yet /private/var still EROFS
+because /private/var is the DATA volume (absent), not the root mount's MNT_RDONLY. See the TL;DR at
+the top and the newest sections at the end (Data volume + APFS volume group + lever 1/2).
+
 Full iOS 27 userspace boots. SpringBoard spawns (pid e.g. [91]), runs ~15-22s, then aborts with
 SIGTRAP; launchd's 3-strike consecutive-crash policy reboots ("rebooting due to critical process
 crashes: SpringBoard"), which cascades into the SIGTERM logout teardown and finally the

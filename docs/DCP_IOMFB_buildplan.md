@@ -568,3 +568,50 @@ Definitive conclusion for goal 3 on an Intel Mac with iOS 27 / t8140:
    AppleParavirtGPU); or (c) full DCP/RTBuddy coprocessor emulation (Asahi-scale, and the VM
    deliberately avoids that path). This is an empirically verified host/platform limitation,
    not an emulation-effort gap. Goals 1 and 2 are unaffected and complete.
+
+## BUILD STARTED: the DCP-force foundation (this session)
+
+Committed to building the real thing (force the DCP coprocessor boot + implement the iOS-27
+IOMFB protocol), since the DCP is the only path where the guest driver is actually present in
+this build (PVG is Apple-silicon-only on the host; the paravirtual driver is not loadable here).
+Laid the concrete foundation for the force:
+
+Force target mechanics (all recovered by RE this session, addresses are short static VA,
+runtime = +0x20000000, file offset = -0x7004000):
+- DCP display-driver init/probe: 0x89efb28 (runs; reads join-power-plane, require-force-wakeup
+  into [this+0x2cc], dcp-controls-value-on into [this+0x2d4]; this in x19; retab at 0x89f1a34).
+- DCP power-transition (writes dcp-controls-value-on to the control reg and boots): 0x89f3c4c,
+  called from the power handler 0x89f3b58 at 0x89f3bcc/0x89f3bec.
+- DCP boot/wake helper: 0x89f2620, invoked as f(x0=this, w1=1, x2=this) on the power-on path
+  (see 0x89f3df0..0x89f3e18).
+- Generic IOKit force: IOService::temporaryPowerClampOn (symbol
+  __ZN9IOService21temporaryPowerClampOnE present) clamps a device to max power;
+  changePowerStateToPriv/makeUsable/activityTickle symbols also present.
+- RTBuddyV2::start = 0xa7bb728 (coprocessor runtime; succeeds, defers the ASC mailbox bring-up).
+
+The obstacle to a one-instruction patch: IOKit PM methods are dispatched via the vtable with
+PAC (blraa), so their static addresses are not reachable from a direct bl for a simple call
+injection, and the target functions (RTBuddyV2::start, the DCP init) are large with far returns
+and no free instruction slots where `this` is guaranteed live. So the clean force is a
+code-cave / trampoline patch (the same technique the rwroot mountroot-RW stub used): place a
+small stub that loads `this` and calls the DCP boot 0x89f2620 (or temporaryPowerClampOn), and
+redirect one existing call site at the tail of the DCP init (0x89efb28, before the 0x89f1a34
+retab) to the stub, then fall through. That is the next concrete brick.
+
+Full build roadmap from here (each a real, multi-brick stage):
+1. Force the DCP coprocessor boot via the code-cave stub above so RTBuddy sets up the ASC
+   mailbox; verify by seeing the guest write CPU_CONTROL / our apple_rtkit logging the HELLO
+   handshake. (start here)
+2. Complete the RTKit management + AFK ring handshake (apple_rtkit.c + apple_dcp.c already do
+   most of it; verify against real guest traffic once the mailbox is live).
+3. Implement the IOMFB shmem-RPC responder for the iOS-27 protocol tier in apple_dcp.c: capture
+   the guest's real IOMFB messages (our RECV handler already hex-dumps the TX ring), decode the
+   swap_start/swap_submit and the surface descriptors against the Asahi reference in this doc,
+   adjusting for the iOS-27 opcode/struct differences (the large, Asahi-scale part).
+4. DART-translate the surface DVA to guest physical, read + (if needed) decompress the surface,
+   convert the DCP fourcc to x8r8g8b8, and blit it into the DarwinFB scanout so real guest
+   frames reach the host window / VNC. That is the goal-3 criterion.
+
+Honest scope: stage 1 (force) is the immediate concrete brick and is buildable via the
+code-cave. Stage 3 (the iOS-27 IOMFB protocol) is the Asahi-scale, multi-session part. This is
+the real build; it advances brick by brick, not in one turn.

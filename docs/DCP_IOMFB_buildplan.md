@@ -434,3 +434,63 @@ took Stage A from the restore-ramdisk dead end to a precise, root-caused model o
 boot where the entire display stack attaches and the single kernel-side gate is the DCP
 coprocessor's power-plane bring-up never being triggered. That is the concrete thing a
 dedicated next effort must build.
+
+## MAJOR PIVOT (this session): iOS in a VM uses paravirtual graphics, not the DCP
+
+Investigating new ground settled the direction: emulating the real DCP is the wrong
+path for a VM. In a VM, iOS does not bring up the physical Display CoProcessor at all
+(this is exactly why RTBuddy(DCP) never powers on and why AMFI skips the PMGRAON latch
+"due to AVP"). Apple's own Apple-silicon VMs present a PARAVIRTUAL GPU instead, and all
+the pieces to do the same already exist here:
+
+- iOS 27 kernelcache HAS the paravirtual GPU driver: the class "AppleParavirtGPU" is
+  registered in bootkc, next to "AppleVirtIONeuralEngineDevice" and
+  "AppleVirtIOAgentDevice" (a whole VM-mode paravirtual/virtio driver family), plus the
+  userspace side "com.apple.gpusw.ParavirtualizedGraphicsGPUTask". So the guest ships the
+  driver; nothing to install.
+- qemu-sptm ALREADY compiles the matching host device: hw/display/apple-gfx.m +
+  apple-gfx-mmio.m (the AArch64 MMIO variant), and the build reports
+  "ParavirtualizedGraphics support: YES"; apple_gfx_mmio_* symbols are in the binary.
+  apple-gfx is a thin shim over Apple's host ParavirtualizedGraphics.framework (PVG):
+  it maps guest RAM, renders the guest's Metal-style command stream through host Metal,
+  and pushes surface/cursor updates back. It exposes two MMIO regions (a GFX region sized
+  by PGDeviceDescriptor.mmioLength and a fixed 0x10000 IOSFC region) and two IRQs.
+- The host HAS the framework: /System/Library/Frameworks/ParavirtualizedGraphics.framework
+  is present on this Intel Mac (Metal works on Intel too).
+- The wiring template exists: hw/vmapple/vmapple.c create_gfx() does
+  qdev_new("apple-gfx-mmio"); sysbus_mmio_map(gfx,0,GFX_base); sysbus_mmio_map(gfx,1,
+  IOSFC_base); sysbus_connect_irq(gfx,0/1, ...). vmapple uses GIC; our darwin machine uses
+  AIC, so the IRQ wiring adapts to aic_irq_line().
+
+Why this beats the DCP: it is the path Apple's VMs actually use; it avoids the DCP power
+chicken-and-egg, the FDR/panel_id dependency, compressed surfaces, and the unknown iOS-27
+IOMFB protocol. It reuses working QEMU code and the host framework.
+
+Open questions to resolve before/while wiring (all flagged honestly):
+1. The exact DT match for AppleParavirtGPU: its IOKit personality is NOT a literal string
+   in __PRELINK_INFO (0x4358000+0x280000) and no "apple,*gpu/paravirt/gfx" compatible was
+   found, so the node name/compatible the guest matches is undocumented and buried. Must
+   be recovered by RE'ing the AppleParavirtGPU IOService (its probe/match, superclass in
+   IOGPUFamily) or from a reference Apple iOS-VM device tree. The existing DT has a real
+   "gpu,t8140" node for AGX; the VM path likely replaces/augments it with a paravirt match.
+2. Whether iOS's AppleParavirtGPU speaks a PVG protocol the host framework's shim accepts
+   (macOS guests are confirmed; iOS is unverified - Apple's iOS-in-VM notes even say the
+   GPU is not emulated and a plain virtual framebuffer is used for that limited scenario).
+3. Whether PVG works host-side on Intel with an iOS guest.
+4. The Apple ADT parser used here cannot create/resize nodes at runtime (only edit
+   existing property values), so adding the paravirt-gpu DT node needs an offline
+   dt_fixup pass, not a runtime patch.
+
+Concrete build plan (paravirtual path):
+A. Recover AppleParavirtGPU's DT match (RE the kext's probe/superclass, or diff against a
+   real Apple VM iOS device tree).
+B. Add that node to dtree_ios offline (dt_fixup), pointing at the MMIO base we choose.
+C. Wire apple-gfx-mmio into hw/arm/darwin.c behind a DARWIN_PVGFX env: create the device,
+   map its two MMIO regions, connect its two IRQs via aic_irq_line, realize it. Rebuild.
+D. Boot; watch the guest IOKit matching for AppleParavirtGPU attaching to our device;
+   iterate the compatible/registers until it binds and PVG starts producing frames into a
+   surface we scan out to the DarwinFB/host window.
+
+This supersedes the DCP-coprocessor line for goal 3. The DCP analysis (Stages A/B iters
+1..6) remains valid as the proof that the physical path is a dead end in a VM, which is
+what pointed here.

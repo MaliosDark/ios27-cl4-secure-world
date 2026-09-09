@@ -1222,3 +1222,162 @@ kernel slide 0x20000000; struct mount mnt_flag @ +0x70; apfs_vfsop_mountroot 0xf
 finalizer/zeroer seen at 0xfffffff02b34b34c; ROSV log 0xfffffff00a8e09f8; shadow setup
 0xfffffff00a90f1c0. gdbstub port opens ~90s in; ipsw disass MUST use --quiet (markup hangs);
 SBWatchpoint has NO SetScriptCallbackFunction but SBBreakpoint does; StepOut works in a script.
+
+---
+
+## Checkpoint: snapshot ruled out, RO is live-fs policy (deterministic static-patch pass)
+
+This pass replaced the flaky runtime lldb "shotgun" with clean, deterministic static
+kernel patches on a COPY of the boot kernelcache (firmware/bootkc.md0.rwroot; the working
+firmware/bootkc.md0.nopf4 is left untouched), each booted headless and read from the serial log.
+Two patches, each on a byte offset confirmed by a unique in-binary signature that also matched
+the VA arithmetic (XNU core __TEXT_EXEC base VA 0xfffffff00aa61000 -> file 0x3a5d000):
+
+1. vfs_isrdonly leaf (static 0xfffffff00acf7368): patched `and w0,w8,#0x1` -> `mov w0,#0`
+   (file off 0x3cf3370, unique 16-byte signature). Result: NO change. fixup-mobile-tmp still
+   logs "could not set create /private/var/mobile/tmp: Read-only file system".
+2. apfs_vnop_mkdir internal RO gate (static 0xfffffff00a8b6964): the EROFS(0x1e) at 0xa8b6968 is
+   gated by `ldrb w8,[x22,#0x9d]; tst w8,#0xc0; b.eq proceed`. Patched the `b.eq` to an
+   unconditional `b` (file off 0x38b2964, `60 01 00 54` -> `0b 00 00 14`). Result: NO change.
+
+### What this proves
+- The EROFS on /private/var is NOT produced by the vfs_isrdonly leaf, and NOT by apfs_vnop_mkdir's
+  own [node+0x9d] & 0xc0 gate. It is enforced BEFORE apfs runs, at the VFS authorize/lookup layer,
+  which reads `mnt_flag & MNT_RDONLY` (mount+0x70, bit0) with INLINE code, not via the leaf.
+- Root is NOT mounted from a sealed snapshot. The boot log shows the named-root-snapshot lookup
+  FAILING and falling back to the live fs:
+    fs_lookup_root_snapshot_name:375  md0s1 failed to get root-snapshot-name from DT
+    apfs_find_named_root_snapshot_xid:2153/2191  failed / global payload NULL
+    apfs_vfsop_mount:2914  md0s1 failed to find named root snapshot: Need authenticator (81)
+    apfs_log_op_with_proc  md0s1 mounting volume RaveSeedD47OS (then mount-complete)
+  and the string "Failed to find the root snapshot. Rooting from the live fs of a sealed volume
+  is not allowed on a RELEASE build" is present at 0xfffffff00a8e9198. So the volume is the LIVE,
+  physically-writable APFS fs (backed by the in-RAM ramdisk), held read-only only by POLICY
+  (MNT_RDONLY, "rootfs mount flags: 0x1480d001"), exactly the "needs mount -uw /" situation.
+  APFS even carries the intended mechanism: apfs_mount_upgrade_checks (0xfffffff00a8e91a0,
+  "can't write-upgrade a snapshot mount"). Our boot never runs a userspace `mount`, so nothing
+  upgrades root to RW.
+- No Data volume is mounted at all: there is no mount_apfs / fstab / volume-group Data mount in
+  the boot. Real iOS keeps /private/var on a separate writable Data volume; our single-dmg boot
+  puts /private/var inside the RO system volume, so every /var write fails (fixup-mobile-tmp,
+  /var/run/lockdown.sock, mDNSResponder, racoon).
+- SpringBoard still spawns (~100+ log lines) and the system still ends in
+  "rebooting due to critical process crashes" -> "Halt/Restart Timed Out", i.e. the RO /var wall
+  is unchanged by the two apfs-layer patches.
+
+### The one correct lever
+Clear MNT_RDONLY (mount+0x70 bit0) on the root mount so ALL enforcement (the 9 inline sites
+below + vfs_isrdonly + apfs) sees a writable fs. Because root is the live fs on a RAM-backed
+ramdisk, the write physically succeeds and is simply lost on reboot -- acceptable for boot-to-
+SpringBoard. This is the in-kernel equivalent of `mount -uw /`.
+
+Nine inline `mnt_flag & MNT_RDONLY` (bit0) test sites in XNU core (runtime = static + 0x20000000):
+  0xfffffff00abb95ec  0xfffffff00acd33cc  0xfffffff00acd37d4  0xfffffff00acd8070
+  0xfffffff00acd851c  0xfffffff00ace89d0  0xfffffff00acf736c (vfs_isrdonly, already patched)
+  0xfffffff00acfa11c  0xfffffff00b02d3ec
+The vnode_authorize enforcer is among 0xacd33cc/0xacd37d4/0xacd8070/0xacd851c/0xace89d0.
+
+Next: rather than patch each enforcer (broad + risky), clear bit0 in the root mount at mount
+finalize. Find the single mnt_flag store that sets bit0 for the root mount (vfs_mountroot /
+apfs live-fs fallback path) and drop the RDONLY bit, or inject a vfs_clearflags(mp, MNT_RDONLY)
+after apfs_vfsop_mount succeeds for the root volume. Cut criterion unchanged: fixup-mobile-tmp
+without "Read-only file system", then SpringBoard past ~20s without "rebooting due to critical
+process crashes".
+
+---
+
+## MILESTONE: root mounted READ-WRITE in-kernel; SpringBoard survival extended 2-3x
+
+The "one correct lever" landed. A deterministic static patch clears MNT_RDONLY on the root
+mount at mount time (the in-kernel equivalent of `mount -uw /`), and SpringBoard now runs far
+longer before its crash-loop.
+
+### The working patch (firmware/bootkc.md0.rwroot, a COPY; nopf4 left intact)
+apfs_vfsop_mountroot (static 0xfffffff00a8eb380, x19=mp) calls its mount worker and, on success
+(cbz w0 -> 0xa8eb3f8), runs finalizers with mp still in x19. XNU's mount_common sets MNT_RDONLY
+in mnt_flag BEFORE apfs runs, so the clear must happen on this success path. A small stub was
+placed in the never-taken-on-success failure-log region and the success entry redirects to it:
+  - stub @ file 0x38e73dc (runtime 0xa8eb3dc):
+      ldr w8,[x19,#0x70]        ; 68 72 40 b9   (mnt_flag)
+      and w8,w8,#0xfffffffe     ; 08 79 1f 12   (clear bit0 = MNT_RDONLY)
+      str w8,[x19,#0x70]        ; 68 72 00 b9
+      mov x0,x19                ; e0 03 13 aa   (restore the overwritten insn's effect)
+      b   0xa8eb3fc             ; 04 00 00 14   (rejoin finalizer path)
+  - redirect @ file 0x38e73f8 (runtime 0xa8eb3f8): mov x0,x19 -> `b 0xa8eb3dc` (f9 ff ff 17)
+  (Caveat: an actual root-mount FAILURE would now fall into the stub; root never fails in this
+  boot, so it is acceptable for the experiment. A clean version would guard the fall-through.)
+All offsets confirmed by a unique in-binary signature that also matched VA arithmetic; the
+`and` immediate was assembled with keystone (hand-guess `08 7d 00 12` was WRONG; correct is
+`08 79 1f 12`).
+
+### Confirmed result
+- libignition now reports "rootfs mount flags : 0x1480d000" (was 0x1480d001) => MNT_RDONLY is
+  CLEAR. Decoded: NOATIME|MULTILABEL|JOURNALED|DOVOLFS|ROOTFS|LOCAL, no RDONLY, no snapshot.
+- SpringBoard survival: BEFORE it crash-looped at ~20-31s guest; NOW it launches, runs services
+  ("launching: system support" ... repeated "launching: inefficient"), and each SpringBoard
+  instance runs ~3-7.4s; boot reaches 65-91s before "rebooting due to critical process crashes:
+  SpringBoard". Crash is SIGTRAP (assertion/trap), sent by the exception handler.
+
+### Remaining wall: /private/var is a SEPARATE mechanism (NOT root MNT_RDONLY)
+With root fully RW, exactly 4 writes still fail with "Read-only file system (30)", ALL under
+/private/var: fixup-mobile-tmp create /private/var/mobile/tmp, and three /var/run socket binds
+(com.apple.mobile.lockdown lockdown.sock, com.apple.racoon vpncontrol.sock,
+com.apple.mDNSResponder). Findings:
+- Only ONE volume mounts (RaveSeedD47OS = md0s1, System role). No Data volume, no second mount,
+  no firmlink log lines. So /private/var lives on the (now-RW) root volume, yet writes still fail.
+- Patching apfs_vnop_create's RO gate (0xfffffff00a8c7618 b.eq -> b, file 0x38c3618) AND
+  apfs_vnop_mkdir's gate (0xfffffff00a8b6964, file 0x38b2964) had NO effect on these /var writes
+  => the /var EROFS is produced BEFORE/OUTSIDE those apfs vnop `[node+0x9d] & 0xc0` gates.
+- Leading hypothesis: APFS FIRMLINK redirection. On iOS the System volume firmlinks /private/var
+  (and friends) to the Data volume; with no Data volume mounted, /private/var resolves to a
+  synthetic/redirected read-only node, so writes EROFS regardless of the root mount being RW.
+  Alternative: System-volume-role write protection on the /private/var subtree.
+- SpringBoard's own crash reason is not on the serial console (crash reports would be written
+  under /var/mobile/Library/Logs, which is exactly what is unwritable). The SIGTRAP is most
+  likely the documented BSUIMappedImageCache (BaseBoardUI) needing a writable temp dir under
+  /var. Fixing /var should both unblock SpringBoard and let a crash report be written for any
+  residual failure.
+
+### Confirmed working patch set in bootkc.md0.rwroot (this milestone)
+1. mountroot RDONLY-clear stub (above) -- the load-bearing fix.
+2. vfs_isrdonly leaf -> return 0 (file 0x3cf3370) -- proven no-op on its own; harmless.
+3. apfs_vnop_mkdir 0x9d/0xc0 gate -> always pass (file 0x38b2964) -- no-op for /var.
+4. apfs_vnop_create 0x9d/0xc0 gate -> always pass (file 0x38c3618) -- no-op for /var.
+Next: identify the /private/var redirect (firmlink or System-role) and neutralize it, then
+re-test the fixup-mobile-tmp line and SpringBoard survival past ~40s.
+
+### /private/var wall: firmlinks RULED OUT too
+Forced apfs to mount the live-fs root with firmlinks disabled: patched the firmlink-control
+branch in apfs_mount_livefs (0xfffffff00a938a98: `tbnz w8,#0x2,0xa938ae4` -> unconditional `b`,
+file 0x3934a98, `68 02 10 37` -> `13 00 00 14`). Boot log now prints
+"apfs_mount_livefs:29560: md0 mount no firmlinks" and sets the no-firmlinks flag at mp+0xcd4.
+Result: NO change -- fixup-mobile-tmp still EROFS on /private/var/mobile/tmp, still exactly 4
+"Read-only file system (30)" (fixup + lockdown.sock + racoon vpncontrol.sock + mDNSResponder),
+SpringBoard still SIGTRAPs at ~57s. No new panics (the patch is safe, just not the cause).
+
+### Summary of what the /private/var EROFS is NOT (all ruled out with clean patches)
+- NOT root MNT_RDONLY: root is now RW (0x1480d000) and SpringBoard's OTHER writes succeed (it
+  runs to ~57-91s), yet only the /private/var paths fail.
+- NOT the apfs_vnop_create / apfs_vnop_mkdir `[node+0x9d] & 0xc0` gate (both patched to pass).
+- NOT firmlink redirection (mounted with no firmlinks).
+- NOT a sealed snapshot (root is the live fs; snapshot auth failed).
+The block is PATH-SPECIFIC to /private/var (the paths that are the separate Data volume on real
+iOS). Remaining hypotheses, for a fresh session with a working lldb backtrace on the EROFS site:
+  a. MACF/Sandbox policy returning EROFS for the restricted system-volume /var subtree (the mount
+     carries MNT_MULTILABEL 0x04000000, so MACF is active). Look at mac_vnode_check_create and
+     the sandbox/AMFI hooks.
+  b. A deeper apfs transaction/purgeable/dataless check for the /var subtree.
+  c. /private/var being a distinct read-only entity (a separate unmounted Data volume in the
+     md0 container; only RaveSeedD47OS/System mounted). Check whether the dmg container has a
+     Data-role volume and, if so, mount it RW at /private/var.
+Efficient ground-truth method next time: do NOT break on every vnop over gdbstub (thousands of
+hits, far too slow). Instead inject a tiny kernel log patch at the create/mkdir path that prints
+the target name + the deciding flag, OR set a single conditional breakpoint keyed on the process,
+to capture the ONE backtrace for the fixup-mobile-tmp create.
+
+### Net milestone this session
+Load-bearing win: in-kernel `mount -uw /` via the apfs_vfsop_mountroot RDONLY-clear stub. Root is
+read-write; SpringBoard now launches and runs services for ~57-91s (was a ~20-31s crash-loop).
+The last wall to a live SpringBoard is the path-specific /private/var write block above.
+firmware/bootkc.md0.rwroot holds: mountroot RW stub (load-bearing) + vfs_isrdonly=0 + mkdir/create
+0x9d-gate passes + no-firmlinks (the latter four are no-ops for /var but harmless). nopf4 intact.

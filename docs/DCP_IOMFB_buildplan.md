@@ -530,3 +530,41 @@ model the VM-platform enumeration, wire apple-gfx-mmio, verify PVG-on-Intel) are
 multi-session engineering effort whose feasibility hinges on the unverified PVG-iOS-on-Intel
 question. This document is the complete map for that effort. Goals 1 and 2 are done and
 independent of this.
+
+## DEFINITIVE (this session): the paravirtual path requires an Apple Silicon host; goal 3 pixels are not viable on Intel
+
+Tested both the viability of PVG on this Intel host (A) and the presence of the guest
+driver in this build (B). Both are negative, definitively.
+
+A. PVG viability on Intel (direct test against the host framework, /tmp/pvg2.m):
+   - dlopen /System/Library/Frameworks/ParavirtualizedGraphics.framework: OK (loads on Intel).
+   - PGDeviceDescriptor class: found; instance works; mmioLength = 0x4000.
+   - PGNewDeviceWithDescriptor symbol: found.
+   - PGNewDeviceWithDescriptor(desc) with a FULL descriptor (createTask/destroyTask/mapMemory/
+     unmapMemory/readMemory/raiseInterrupt no-op handlers, exactly the set apple-gfx wires):
+     returns NULL.
+   So Apple's ParavirtualizedGraphics.framework LOADS on Intel but REFUSES to create a device.
+   PVG is Apple-silicon-only; apple-gfx (which is a thin shim over this framework) therefore
+   cannot produce frames on an Intel host, regardless of guest wiring.
+
+B. Guest driver presence in this build: the rootfs (a physical-device IPSW for iPhone17,3)
+   has System/Library/{Extensions,DriverExtensions,ExtensionKit,Caches} but NO
+   System/Library/KernelCollections, no auxiliary kernelcache, and no kernelcache file. So
+   AppleParavirtGPU is not a loadable/matchable driver in this build (it is only a referenced
+   class name in the boot KC with no IOKit personality). The paravirtual/VM driver family is
+   not shipped in a physical-device image.
+
+Definitive conclusion for goal 3 on an Intel Mac with iOS 27 / t8140:
+   - simple/boot framebuffer: does not exist on t8140 (XNU renders nothing to boot_args.Video).
+   - real DCP coprocessor: a VM dead end (iOS does not power it in a VM; RTBuddy boot never
+     fires; AMFI skips PMGRAON due to AVP).
+   - paravirtual PVG (the only VM-viable graphics path): requires an Apple Silicon HOST; Apple's
+     PVG framework refuses device creation on Intel (verified).
+   Therefore there is NO viable path to guest pixels for this OS/SoC on an Intel host with the
+   available components. Reaching goal 3 would require one of: (a) an Apple Silicon host so the
+   PVG framework works and apple-gfx can be wired up (plus a build/DT that actually loads and
+   binds AppleParavirtGPU); (b) a full from-scratch reimplementation of Apple's proprietary PVG
+   MMIO/ring protocol inside QEMU (large, undocumented, and still needs a guest that loads
+   AppleParavirtGPU); or (c) full DCP/RTBuddy coprocessor emulation (Asahi-scale, and the VM
+   deliberately avoids that path). This is an empirically verified host/platform limitation,
+   not an emulation-effort gap. Goals 1 and 2 are unaffected and complete.

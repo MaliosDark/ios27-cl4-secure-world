@@ -1896,3 +1896,20 @@ rd=md0 serial=3 -v wdt=-1 wlan-olyhal-abort). Once /private/var is writable the 
 
 Takeaway: goal 2 was a downstream symptom of goal 1, not a separate watchdog problem. wdt=-1 was
 already in the boot args; the real killer was the read-only /private/var, now fixed.
+
+---
+
+## [GOAL 3] frontier: DCP/IOMFB coprocessor (build plan recorded)
+
+Confirmed empirically that no linear/simple-framebuffer path exists on t8140
+(DCP_NO_SCANOUT=1 screendump is pure black; XNU renders nothing to boot_args.Video).
+The only route to guest pixels is emulating the DCP coprocessor protocol
+(RTKit -> AFK -> EPIC -> IOMFB shmem RPC -> swap_submit -> DART-mapped compressed
+surface). Obtained the full protocol blueprint from Asahi source and localized the
+current blocker on the FULL OS boot (new vs the restore-ramdisk FINDINGS): RTBuddy(DCP)
+now instantiates ("RTBuddy(DCP): start()") but does ZERO mailbox MMIO and does not
+respond to a proactively-announced HELLO, and -d unimp shows no display MMIO at all,
+so it is blocked before the mailbox stage on DCP firmware delivery / coprocessor boot
+(IOMFB_FDR_Loader also exits(1)). Full spec, blocker analysis and the staged roadmap
+(A coprocessor boot, B RTKit/AFK, C IOMFB RPC, D swap capture, E present) are in
+docs/DCP_IOMFB_buildplan.md. Stage A (get RTBuddy to write CPU_CONTROL RUN) is the gate.

@@ -1096,3 +1096,47 @@ padding. The panel now renders flat and readable. Regenerated the two Spanish-er
 screenshots as flat English captures (shots/panel-boot-screen.png = full-OS boot, ring + live
 daemon console; shots/panel-root-shell.png = restore-ramdisk Boot A console). The misleading
 kernel-panic screenshot (full-os-root-mounted.png) was already removed.
+
+## 2026-09-09 -- lldb runtime BREAKTHROUGH: mnt_flag pinned, but APFS enforces RO at the VOLUME level
+Static RE could not pin the RO flag (no kernel symbols; 0x4000/0x4001 appear in many unrelated
+contexts). The kernel gdbstub + lldb settled it definitively.
+
+### Method that works (reuse this)
+- ipsw whole-section MARKUP disasm of XNU HANGS; `ipsw macho disass <kc> -t com.apple.kernel
+  -x __TEXT_EXEC.__text --force --quiet` finishes in ~6 s (2.3M lines) and still resolves adrp
+  targets. Use --quiet.
+- Boot with `-S -gdb tcp::1234`; the gdbstub port only opens ~90 s in (the 16 GB ramdisk loads
+  first), so WAIT for the port before connecting or lldb fails with "Failed to connect port".
+- Kernel slide is CONFIRMED 0x20000000 (runtime = static + 0x20000000). Breakpoint at
+  apfs_vfsop_mountroot = static 0xfffffff00a8eb380 -> runtime 0xfffffff02a8eb380 hits reliably.
+- At that breakpoint x0 = the vfs mount (struct mount); "apfs" appears at mp+0xd4.
+
+### Pinned facts
+- struct mount mnt_flag is at OFFSET 0x70.
+- At apfs_vfsop_mountroot ENTRY:  mnt_flag = 0x04005001
+  (MNT_MULTILABEL|MNT_ROOTFS|MNT_LOCAL|MNT_RDONLY) -- XNU already set MNT_RDONLY before calling.
+- AFTER apfs_vfsop_mountroot returns: mnt_flag = 0x1480d001, which EXACTLY matches the
+  "rootfs mount flags : 0x1480d001" that libignition prints every boot. So APFS finalises the
+  flags (and keeps MNT_RDONLY).
+
+### The decisive negative result
+Clearing MNT_RDONLY (bit 0) in mnt_flag at BOTH points was tested:
+- cleared at mountroot ENTRY  -> 0x04005000 : writes STILL EROFS (APFS re-set it during mount).
+- cleared AFTER mountroot     -> 0x1480d000 : writes STILL EROFS.
+In both runs fixup-mobile-tmp still logged "could not set create /private/var/mobile/tmp:
+Read-only file system" and SpringBoard still crash-looped to reboot.
+=> The vfs mnt_flag is NOT what rejects the writes. APFS enforces read-only at the VOLUME level
+(the "!apfs->apfs_readonly" assertions in the write vnops), returning EROFS before VFS's
+MNT_RDONLY is ever consulted. Patching/clearing mnt_flag is a dead end; do not retry it.
+
+### Next concrete step
+Clear APFS's own volume read-only state, not mnt_flag. Candidate: the APFS mount/volume struct
+field at +0x128 whose bit 28 (0x10000000) is returned by the small APFS accessor at static
+0xfffffff00a8eb330 (`ldr w8,[x20,#0x128]; ubfx w0,w8,#0x1c,#1; retab`) -- i.e. an "is this volume
+read-only" getter. Reach it at runtime from mp (mnt_data / the APFS private data), clear the bit
+after mount, and re-test the same way (watch for fixup-mobile-tmp to stop logging "Read-only").
+The ROSV path ("apfs mounted RO and is the system volume of a volume group: creating the shadow
+fs_root", log at static 0xfffffff00a8e09f8) is what decides this for the System-role volume.
+Host-side alternatives remain closed: `diskutil apfs changeVolumeRole` is refused (-69599), and a
+Data-volume split needs real restructuring (this rootfs has NO /usr/share/firmlinks, no
+/System/Volumes/Data, one System-role volume, and /private/var is a real dir on it).

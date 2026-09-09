@@ -1819,3 +1819,62 @@ mkdir's deep write path allows the create. This is a bootkc patch (copy), string
 
 Reusable: deterministic lldb pin recipe (break addr; continue; bt; breakpoint disable; finish;
 p/x $x0) works over the gdbstub where Python breakpoint callbacks do NOT in this lldb 20.1.4.
+
+---
+
+## [GOAL 1] SOLVED: writable /private/var, fixup-mobile-tmp with NO EROFS
+
+The apfs-internal-RO theory (25 [node+0x9d]&0xc0 gates) was FALSIFIED: booted bootkc.md0.rwdata
+with all 22 real b.cond RO gates flipped to always-skip, root RW, volume unsealed -> fixup STILL
+got EROFS, identical timing, no panic. So those gates are not the write gate.
+
+Deterministic lldb descent (fresh paused boot per probe; step-in/finish is unreliable over the
+gdbstub with SMP/PAC, but plain breakpoint + read reg is reliable) established:
+- apfs_vnop_mkdir IS entered for the fixup create and returns 0x1e itself.
+- the auth helper 0xa8aed04 succeeds (w21=0 via the [x29,#-0x68] out-param).
+- SOME mkdirs succeed (0xa8b6eb0 local dir-create helper returns w0=0) -- so writes are not
+  uniformly blocked; only /private/var was failing.
+
+ROOT CAUSE (confirmed by experiment, matches XNU/APFS research): the root mount is born read-only
+in the generic root-mount path (vfs_rootmountalloc_internal sets mnt_flag = MNT_RDONLY | MNT_ROOTFS
+for EVERY rootfs). apfs_vfsop_mount reads that MNT_RDONLY at mount time and records RO in its own
+private mount state (mnt_data). Clearing the VFS mnt_flag AFTER mount (the old rwroot stub) does
+NOT touch mnt_data, so every apfs transaction still returns EROFS. Our serial confirms we do NOT
+boot a sealed snapshot ("failed to find named root snapshot: Need authenticator (81)" then mounts
+the live volume RaveSeedD47OS), so a single writable volume is achievable.
+
+THE FIX (two instructions, in bootkc.md0.rwlivefs, a copy):
+1. Early MNT_RDONLY clear: in apfs_vfsop_mountroot, BEFORE the mount worker bl 0xa8e7b68
+   (@0xa8eb3d0), clear mnt_flag bit0 on the mount struct (x19). Injected over the debug-log call
+   at 0xa8eb3b4..0xa8eb3bc (3 words copied from the existing success-path clear at 0xa8eb3dc:
+   ldr w8,[x19,#0x70]; and w8,w8,#0xfffffffe; str w8,[x19,#0x70]). Now apfs is ASKED for RW.
+2. Bypass the RW-mount refusal: apfs_mount_livefs refuses with "can't mount root filesystem
+   writeable" (apfs_mount_livefs:29493, err:1). The gate is a single test at 0xa93886c:
+   tbnz w8, #0, 0xa938894 (bit0 set = allow RW; clear = refuse). Patched to b 0xa938894 (word
+   0x37000148 -> 0x1400000a) so it always takes the allow path. File offset = staticVA - 0x7004000.
+
+RESULT (boot bootkc.md0.rwlivefs + rootfs_norole.dmg + ramdisk.tc):
+- serial: no "can't mount root filesystem writeable"; md0s1 mounts RW, mount-complete, no error.
+- fixup-mobile-tmp: "Doing boot task" -> "Finished boot task" with NO EROFS line between them.
+- grep "Read-only file system" over the whole log = 0 hits (previously: fixup + lockdown.sock +
+  vpncontrol.sock + mDNSResponder all EROFS). No panic. SpringBoard/backboardd launch (~18s guest).
+
+This supersedes the 25-gate line entirely. Minimal, string-anchored (the refusal format string
+"%s:%d: %s can't mount root filesystem writeable\n" at 0x7d5fc67), directly testable.
+
+Note for later (goal 1 "real iOS" variant): rwlivefs still has no-firmlinks from rwroot, so
+/private/var is a plain dir on the single RW volume. The production layout (firmlink into a
+separate Data volume) is not required for a writable /private/var once the system volume itself
+mounts RW.
+
+## [GOAL 3] research note: t8140/A19 display goes through the DCP coprocessor
+
+Display path changed at A14: IOMFB is now a client of a Display Coprocessor (DCP) running RTKit +
+signed firmware, talked to over an RTKit mailbox/endpoint RPC. There is NO public QEMU DCP model
+and no public register/protocol map for t8140. SpringBoard-under-QEMU has only been demonstrated on
+A13/t8030 (eShard + cutecatsandvirtualmachines/QEMUAppleSilicon), via the pre-DCP direct-MMIO ADP
+"disp0" model (apple_displaypipe_v4.c, DART-backed VRAM scanout, dpy_gfx_update) plus forced
+QuartzCore software rendering. Lowest-effort pixels on t8140 = the boot framebuffer only (DT "vram"
+node + boot_args.Video base/width/height/rowBytes/depth blitted to the host), which does not yield
+SpringBoard. A19 SpringBoard pixels would require a DCP RTKit endpoint model (large, undocumented)
+or forcing IOMFB into a legacy simple-scanout path (feasibility unproven for iOS 27/A19).

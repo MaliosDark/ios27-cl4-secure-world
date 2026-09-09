@@ -6,22 +6,22 @@ already have. Definition of done, in order: (1) `/private/var` writable (fixup-m
 EROFS); (2) SpringBoard stays up > 5 minutes with no 3-strike reboot; (3) guest pixels in the QEMU
 window (IOMFB blit or VNC of the guest framebuffer -- the boot-log painter does not count).
 
-> **CURRENT STATE (2026-09-09):** Full iOS 27 userspace boots. Hundreds of daemons run and
-> SpringBoard now launches and runs for about 60-90 s of guest time (it used to crash-loop at
-> ~20-31 s). The libSystem / dyld shared cache / Cryptex stage is long crossed; so are DCP/display
-> and CS_KILLED. The remaining wall is a writable **/private/var**: on a real device /private/var is
-> a separate read-write **Data** volume, and this boot mounted only the read-only **System** volume,
-> so writes to /private/var fail EROFS -- fixup-mobile-tmp and SpringBoard's BaseBoardUI temp cache
-> (BSUIMappedImageCache) among them.
+> **CURRENT STATE (2026-09-09):** Goal 1 is DONE. `/private/var` is writable and fixup-mobile-tmp
+> runs with NO EROFS; the whole boot log has zero "Read-only file system" errors (previously
+> fixup-mobile-tmp, lockdown.sock, vpncontrol.sock and mDNSResponder all failed EROFS). No panic.
+> SpringBoard and backboardd launch.
 >
-> Progress toward that: an in-kernel `mount -uw /` (clear MNT_RDONLY in apfs_vfsop_mountroot) took
-> SpringBoard from ~20 s to ~60-90 s. A **Data** volume was then synthesized and paired into a real
-> APFS **volume group** (matching apfs_volume_group_id + Fletcher-64 surgery), which makes the
-> kernel's ROSV shadow-fs-root path fire. The last piece is getting the Data volume actually mounted
-> at /private/var -- pursued now via lever 1 (MobileStorageMounter mount-phase) plus a small
-> userspace mount helper. Kernel-side `kernel_mount` injection is PARKED (XNU-core mount symbols are
-> stripped in this release kernelcache). Live source of truth: `docs/STATE_darwinvm_boot.md`. Text
-> below this banner predates this and is kept for history.
+> The real root cause was found and fixed with two instructions (bootkc.md0.rwlivefs, a copy). Every
+> rootfs is born read-only in the generic root-mount path (vfs_rootmountalloc_internal sets
+> MNT_RDONLY | MNT_ROOTFS); apfs_vfsop_mount reads that flag at mount time and records read-only in
+> its OWN private mount state, so clearing the VFS flag AFTER mount (the earlier stub) left every
+> apfs transaction returning EROFS. The fix: (1) clear MNT_RDONLY on the mount struct BEFORE the
+> apfs mount worker runs, so apfs is asked for read-write; (2) bypass apfs_mount_livefs's explicit
+> refusal "can't mount root filesystem writeable" (a single tbnz gate at 0xa93886c -> always allow).
+> apfs then mounts the single live volume read-write (this boot uses no sealed snapshot), so
+> /private/var is writable with no separate Data volume required. This supersedes the earlier
+> Data-volume / volume-group / mount-phase line entirely. Live source of truth:
+> `docs/STATE_darwinvm_boot.md`. Text below this banner predates this and is kept for history.
 
 
 > **About:** Booting iOS 27 to its real root filesystem on an Intel Mac via
@@ -44,10 +44,10 @@ and lighting the **DCP display panel** with the live boot log along the way.
 
 <p align="center"><em>The emulated panel with the live English kernel console (DCP LINK UP, real driver init, APFS mountroot). SpringBoard has not rendered yet -- see the board above for the current wall.</em></p>
 
-> **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root**, starts
-> `launchd`, runs hundreds of daemons, and **launches SpringBoard** (it survives ~60-90 s). The
-> current frontier is a writable **/private/var**: only the read-only System volume is mounted, so
-> the Data-volume subtree is unwritable. See [Status](#status).
+> **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root read-write**,
+> starts `launchd`, runs hundreds of daemons, and **launches SpringBoard**. Goal 1 (writable
+> **/private/var**, fixup-mobile-tmp with no EROFS) is done; the frontier is now goal 2 (SpringBoard
+> up > 5 min) and goal 3 (guest pixels). See [Status](#status).
 
 ---
 
@@ -82,8 +82,8 @@ kernel boot toward two goals:
   ramdisk), mount it, and reach `launchd`.
 
 Both are working today. Full userspace boots (the SystemOS **Cryptex** dyld shared cache
-is supplied and injected) and SpringBoard launches; the current gate is a writable
-`/private/var` (see [Status](#status)).
+is supplied and injected), the APFS root mounts read-write, `/private/var` is writable
+(goal 1 done), and SpringBoard launches; the frontier is goals 2 and 3 (see [Status](#status)).
 
 ---
 
@@ -168,8 +168,8 @@ sequenceDiagram
         D->>P: paint device id, progress ring, console, panic state
     end
     X->>X: exec /sbin/launchd
-    Note over X,P: launchd + hundreds of daemons run; SpringBoard launches (~60-90 s)
-    Note over X,P: wall: /private/var not writable (Data volume not mounted)
+    Note over X,P: launchd + hundreds of daemons run; SpringBoard launches
+    Note over X,P: APFS root mounts read-write; /private/var writable (goal 1 done)
 ```
 
 ---
@@ -187,15 +187,13 @@ flowchart LR
 
     A -->|"bootkc.md0 + dtree_ios<br/>(real rootfs as md0)"| BB["Boot B: Full OS"]
     BB --> BB1["APFS mountroot ok"]
-    BB1 --> BB2["launchd + daemons; SpringBoard launches"]
-    BB2 --> BB3{"/private/var writable?"}
-    BB3 -->|Data volume mounted| BB4([SpringBoard holds])
-    BB3 -->|System-only, Data missing| BB5[["wall: /private/var EROFS"]]
+    BB1 --> BB2["APFS root mounted read-write"]
+    BB2 --> BB3["launchd + daemons; SpringBoard launches"]
+    BB3 --> BB4([/private/var writable, no EROFS - goal 1 done])
 
     classDef ok fill:#14351f,stroke:#3cb56c,color:#dff6e8;
     classDef blk fill:#3b1f1f,stroke:#b5533c,color:#f6e2e2;
-    class BA2,BA3,BB1,BB2 ok;
-    class BB5 blk;
+    class BA2,BA3,BB1,BB2,BB3,BB4 ok;
 ```
 
 - **Boot A** is the display bring-up: an emulated DCP RTKit endpoint lights the panel
@@ -246,29 +244,30 @@ ultimately, an AGX GPU model for SpringBoard-level UI.
 | `/sbin/launchd` starts | done |
 | `libSystem` / dyld shared cache (Cryptex) | done |
 | Full userspace: hundreds of daemons | done |
-| **SpringBoard launches and runs (~60-90 s)** | done |
-| Root mounted read-write in-kernel (`mount -uw /`) | done |
-| Data volume synthesized + APFS volume group formed | done |
-| Kernel ROSV shadow-fs-root fires | done |
-| **Writable `/private/var` (mount Data volume)** | in progress -- current wall |
-| IOMFB real-surface decode | later |
+| **SpringBoard launches** | done |
+| Root mounted read-write in-kernel at the apfs level | done |
+| **Writable `/private/var` (fixup-mobile-tmp, no EROFS)** | done -- goal 1 |
+| SpringBoard stays up > 5 min, no 3-strike reboot | goal 2, in progress |
+| Guest pixels in the QEMU window | goal 3, later |
+| IOMFB / DCP real-surface decode | later |
 | AGX GPU (SpringBoard UI) | not emulated |
 
-**Immediate blocker: writable `/private/var`.** Full userspace boots and SpringBoard launches
-and runs ~60-90 s, then aborts because `/private/var` is not writable. On a real device
-`/private/var` is a separate read-write **Data** volume in the same APFS volume group as the
-read-only **System** volume; this boot loaded only the System volume, so `/private/var` writes
-return EROFS (fixup-mobile-tmp and SpringBoard's BaseBoardUI `BSUIMappedImageCache` among them).
+**Goal 1 is done: `/private/var` is writable.** fixup-mobile-tmp runs with no EROFS and the whole
+boot log has zero "Read-only file system" errors (previously fixup-mobile-tmp, `lockdown.sock`,
+`vpncontrol.sock` and `mDNSResponder` all failed EROFS). No panic; SpringBoard and backboardd launch.
 
-Done so far: an in-kernel `mount -uw /` (clearing `MNT_RDONLY` in `apfs_vfsop_mountroot`) extended
-SpringBoard from ~20 s to ~60-90 s; a **Data** volume was synthesized and paired into a real APFS
-**volume group** (matching `apfs_volume_group_id` + Fletcher-64 checksum surgery), which makes the
-kernel's ROSV shadow-fs-root path fire. The remaining piece is mounting that Data volume at
-`/private/var`, pursued via `MobileStorageMounter`'s mount phases plus a small userspace mount
-helper. A kernel-side `kernel_mount` injection is parked because XNU-core mount symbols are stripped
-in this release kernelcache. The earlier Cryptex / dyld-shared-cache stage is long crossed; the
-Cryptex is injected at `/private/preboot/Cryptexes/OS` via
-[`inject_cryptex.sh`](scripts/inject_cryptex.sh). Full detail: [`docs/STATE_darwinvm_boot.md`](docs/STATE_darwinvm_boot.md).
+Root cause and fix (two instructions, in the copy `bootkc.md0.rwlivefs`): every rootfs is born
+read-only in the generic root-mount path (`vfs_rootmountalloc_internal` sets `MNT_RDONLY | MNT_ROOTFS`),
+and `apfs_vfsop_mount` reads that flag at mount time and records read-only in its OWN private mount
+state, so clearing the VFS flag after mount left every apfs transaction returning EROFS. The fix is
+(1) clear `MNT_RDONLY` on the mount struct BEFORE the apfs mount worker runs, so apfs is asked for
+read-write, and (2) bypass `apfs_mount_livefs`'s explicit refusal `can't mount root filesystem
+writeable` (a single `tbnz` gate patched to always allow). This boot uses no sealed snapshot
+("failed to find named root snapshot" then mounts the live volume), so apfs mounts the single volume
+read-write and `/private/var` is writable with no separate Data volume required -- this supersedes the
+earlier Data-volume / volume-group / mount-phase approach. The Cryptex is injected at
+`/private/preboot/Cryptexes/OS` via [`inject_cryptex.sh`](scripts/inject_cryptex.sh). Full detail:
+[`docs/STATE_darwinvm_boot.md`](docs/STATE_darwinvm_boot.md).
 
 ---
 

@@ -1754,3 +1754,34 @@ Toward (1), this session established:
 Next (one boot): trust-cache launchd runs hdik to attach a small Data image -> mount at /private/var.
 Success criterion (goal 1): fixup-mobile-tmp with no "Read-only file system".
 Frozen artifacts untouched: nopf4, rwroot, datavol, rootfs_data.dmg.
+
+---
+
+## [GOAL 1] hdik/apfs_boot_util/mount_apfs exhausted -> md0s2 is NOT enumerated by the kernel (step 3)
+
+Went back to the grouped dmg (rootfs_data.dmg clone; System+Data same NX, group 52415645-...).
+The trust-cache mechanism runs each of these AS ROOT in the boot-task phase (identity + cdhash in tc):
+- /sbin/mount -P 2  -> /sbin/mount's own precheck fails first: "mount: missing data volume".
+- apfs_boot_util 1/2 (direct) -> phase 1 "Nothing to do", phase 2 does overprovisioning/snapshots
+  only, never calls mount_by_role -> no Data mount, no error.
+- mount_apfs ROLE=Data /private/var -> statfs("/") then APFSVolumeRoleFind(/dev/md0, role=0x40) ->
+  **"Failed to find a volume with role Data on disk /dev/md0, status: c002"**.
+- hdik dv.dmg (foreign container) -> device appears (/dev/disk1s1) but mount_apfs -> EACCES:
+  iOS requires the Data volume in the SAME NX/volume-group as root, not a foreign container.
+
+Root cause (definitive): every role/group mount uses APFSVolumeRoleFind on the root container
+/dev/md0, and it returns NO Data volume. md0s2 is on-disk in the container NX and the group_id
+matches, but the kernel's rd=md0 imageboot path mounts md0s1 (root) WITHOUT publishing the other
+container volumes as IOMedia/device nodes (note earlier "md0s1 fs iokit node was not found"). So
+/dev/md0s2 never exists and APFSVolumeRoleFind can't see it. This is exactly the "kernel never
+probed vol 2 of the ramdisk NX" case.
+
+=> Step 3 (per plan): a single APFS/IOKit change to PUBLISH md0s2 (make the md0 container's
+second volume enumerable as a device, so APFSVolumeRoleFind finds it and mount_apfs ROLE=Data /
+apfs_boot_util 2 mounts it at /private/var). This is a kernel-side publish (the container volume
+enumeration / the %ss%u 1..100 device-name loop in container_get_dangling_mounts @ ~0xa88547c),
+NOT kernel_mount, NOT another image, NOT NVMe/qemu. It is the last piece for goal 1.
+
+Reusable wins this session (all frozen-artifact-safe): trust-cache-any-Apple-binary-as-root in the
+boot-task phase; the mount-phase-1/2 embedded-plist retarget + cdhash-in-ramdisk.tc recipe.
+Criterion unchanged: fixup-mobile-tmp with no EROFS.

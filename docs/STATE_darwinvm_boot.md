@@ -1878,3 +1878,21 @@ QuartzCore software rendering. Lowest-effort pixels on t8140 = the boot framebuf
 node + boot_args.Video base/width/height/rowBytes/depth blitted to the host), which does not yield
 SpringBoard. A19 SpringBoard pixels would require a DCP RTKit endpoint model (large, undocumented)
 or forcing IOMFB into a legacy simple-scanout path (feasibility unproven for iOS 27/A19).
+
+---
+
+## [GOAL 2] SOLVED: SpringBoard stays up > 5 minutes, no 3-strike reboot
+
+Same boot as goal 1 (bootkc.md0.rwlivefs + rootfs_norole.dmg + ramdisk.tc, args
+rd=md0 serial=3 -v wdt=-1 wlan-olyhal-abort). Once /private/var is writable the crash-loop stops:
+- SpringBoard spawns ONCE (pid 5, guest ~33s) and stays alive: exactly one SpringBoard pid ever
+  appears in the whole log, with no "exited / terminated / respawn / crash / jettison" for
+  SpringBoard or backboardd.
+- Monitored to guest 00:12:45 (> 12 min, criterion is > 5 min) with the process still alive and
+  the guest clock still advancing (9700+ serial lines). Zero panic, zero "Halt/Restart Timed Out",
+  zero "3 strike".
+- Previously SpringBoard crash-looped at ~20-31s guest because the EROFS on /private/var killed it
+  (fixup + BSUIMappedImageCache). Writable /private/var removed that, so goals 1 and 2 fell together.
+
+Takeaway: goal 2 was a downstream symptom of goal 1, not a separate watchdog problem. wdt=-1 was
+already in the boot args; the real killer was the read-only /private/var, now fixed.

@@ -6,10 +6,12 @@ already have. Definition of done, in order: (1) `/private/var` writable (fixup-m
 EROFS); (2) SpringBoard stays up > 5 minutes with no 3-strike reboot; (3) guest pixels in the QEMU
 window (IOMFB blit or VNC of the guest framebuffer -- the boot-log painter does not count).
 
-> **CURRENT STATE (2026-09-09):** Goal 1 is DONE. `/private/var` is writable and fixup-mobile-tmp
-> runs with NO EROFS; the whole boot log has zero "Read-only file system" errors (previously
-> fixup-mobile-tmp, lockdown.sock, vpncontrol.sock and mDNSResponder all failed EROFS). No panic.
-> SpringBoard and backboardd launch.
+> **CURRENT STATE (2026-09-09):** Goals 1 and 2 are DONE. `/private/var` is writable and
+> fixup-mobile-tmp runs with NO EROFS; the whole boot log has zero "Read-only file system" errors
+> (previously fixup-mobile-tmp, lockdown.sock, vpncontrol.sock and mDNSResponder all failed EROFS).
+> With writable /private/var the crash-loop stops: SpringBoard spawns once and stays up past 12 min
+> of guest time (criterion is 5 min), single stable instance, no 3-strike reboot, no panic. Goal 2
+> turned out to be a downstream symptom of goal 1. Next frontier is goal 3 (guest pixels).
 >
 > The real root cause was found and fixed with two instructions (bootkc.md0.rwlivefs, a copy). Every
 > rootfs is born read-only in the generic root-mount path (vfs_rootmountalloc_internal sets
@@ -46,8 +48,8 @@ and lighting the **DCP display panel** with the live boot log along the way.
 
 > **Status:** the full OS boots through SPTM to XNU, **mounts its real APFS root read-write**,
 > starts `launchd`, runs hundreds of daemons, and **launches SpringBoard**. Goal 1 (writable
-> **/private/var**, fixup-mobile-tmp with no EROFS) is done; the frontier is now goal 2 (SpringBoard
-> up > 5 min) and goal 3 (guest pixels). See [Status](#status).
+> **/private/var**, fixup-mobile-tmp with no EROFS) and goal 2 (SpringBoard up > 5 min, no 3-strike
+> reboot) are done; the frontier is now goal 3 (guest pixels). See [Status](#status).
 
 ---
 
@@ -83,7 +85,8 @@ kernel boot toward two goals:
 
 Both are working today. Full userspace boots (the SystemOS **Cryptex** dyld shared cache
 is supplied and injected), the APFS root mounts read-write, `/private/var` is writable
-(goal 1 done), and SpringBoard launches; the frontier is goals 2 and 3 (see [Status](#status)).
+(goal 1 done), and SpringBoard launches and stays up past 5 min (goal 2 done); the frontier is
+goal 3, guest pixels (see [Status](#status)).
 
 ---
 
@@ -247,8 +250,8 @@ ultimately, an AGX GPU model for SpringBoard-level UI.
 | **SpringBoard launches** | done |
 | Root mounted read-write in-kernel at the apfs level | done |
 | **Writable `/private/var` (fixup-mobile-tmp, no EROFS)** | done -- goal 1 |
-| SpringBoard stays up > 5 min, no 3-strike reboot | goal 2, in progress |
-| Guest pixels in the QEMU window | goal 3, later |
+| **SpringBoard stays up > 5 min, no 3-strike reboot** | done -- goal 2 |
+| Guest pixels in the QEMU window | goal 3, next |
 | IOMFB / DCP real-surface decode | later |
 | AGX GPU (SpringBoard UI) | not emulated |
 

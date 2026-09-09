@@ -347,3 +347,47 @@ specific VM power handshake), so RTBuddy proceeds to set up and drive the ASC ma
 Only then do the AFK/EPIC/IOMFB/swap/DART/decompress stages (with unknown iOS-27
 layouts) become reachable. This is Asahi-scale reverse engineering for an A14+ DCP that
 no public project has done; it is a multi-session frontier, now fully mapped here.
+
+## Stage A/B iteration 5 (this session): hv_vmm_present is AMFI-only; the real key is iBoot pre-boot
+
+Corrected a wrong lead and found the actionable root. The "Booted in a VM" / "skipping
+PMGRAON latch due to AVP" behaviour is driven by the kern.hv_vmm_present sysctl, but its
+only effect here is AMFI-internal: the AMFI code at 0x91a6404 reads hv_vmm_present via a
+sysctl lookup (call at 0x91a6424) and, if set, stores 1 to an AMFI "is-VM" byte at
+0x8091681 and logs "Booted in a VM". That gates only AMFI's PMGRAON security latch, not
+the DCP power path. So hv_vmm_present is a red herring for the DCP boot; forcing it to 0
+would only change AMFI and would push the guest to drive real hardware we do not fully
+model (riskier, not helpful).
+
+The actionable root is the display power chicken-and-egg and how real platforms resolve
+it:
+- IOMFB_FDR_Loader needs panel_id/als_id/DIC from a live display instance (a booted DCP).
+- The DCP is powered on by its display client (IOMFB) requesting power.
+- So DCP-power needs IOMFB, and IOMFB (panel_id) needs a powered DCP: a cycle.
+On real hardware, and under Apple's own Virtualization.framework, this cycle does not
+exist because iBoot boots the DCP coprocessor BEFORE XNU: it powers the ASC, loads the
+DCP firmware into SRAM, and starts it, so when XNU's RTBuddy attaches, the coprocessor is
+ALREADY RUNNING and answers immediately (panel data available at once). qemu-sptm stands
+in for iBoot but does NOT pre-boot the DCP coprocessor; our apple_rtkit only sends the
+RTKit HELLO after the guest writes CPU_CONTROL RUN, and RTBuddy never gets to that because
+its boot is deferred and the cycle above never resolves.
+
+Concrete engineering direction (next session): make qemu-sptm present the DCP as an
+already-running coprocessor, the way iBoot leaves it:
+1. In apple_rtkit / apple_dcp, model the ASC as "booted": drive the RTKit HELLO -> EPMAP
+   -> (await STARTEP) handshake proactively at attach, and set whatever ASC status /
+   mailbox "IOP running" indicator RTBuddy reads to decide the coprocessor is already up,
+   so RTBuddy attaches instead of cold-booting and sets up its mailbox RX/IRQ.
+2. Determine exactly what RTBuddyV2 checks to distinguish "cold boot the IOP" from
+   "attach to a running IOP" (a status register, a DT property such as the iop-dcp-nub
+   "pre-loaded"/"running" flag, or a HELLO it expects unprompted). The earlier
+   DARWIN_RTKIT_ANNOUNCE (proactive HELLO) got no response precisely because RTBuddy had
+   not set up the mailbox RX yet; that setup is what must be triggered.
+3. Only then does the mailbox handshake begin, unblocking Stages B..E (AFK, IOMFB RPC,
+   swap, DART, present) with the still-unknown iOS-27 protocol layouts.
+
+Net: goal 3 is a fully mapped, multi-session frontier. This session advanced Stage A from
+"restore-ramdisk, kexts never load" to a precise, root-caused model: full-OS boot loads
+the display stack, RTBuddy attaches successfully, and the one remaining kernel-side gate
+is that the DCP coprocessor is never brought up because qemu-sptm does not pre-boot it as
+iBoot would. That is the concrete thing to build next.

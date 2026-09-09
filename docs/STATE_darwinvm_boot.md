@@ -1153,3 +1153,40 @@ data pointer -> mnt_data, typically at a fixed struct-mount offset) to get the a
 object, then clear bit 28 of its +0x128 and re-test. Alternatively set a hardware WATCHPOINT on
 mnt_flag (mp+0x70) to catch every writer and confirm which code path finalises 0x1480d001, then
 target the APFS write-vnop EROFS check (the "!apfs->apfs_readonly" path) directly.
+
+## 2026-09-09 -- ROOT CAUSE FULLY RESOLVED: mnt_flag IS the enforcer, but the root pivots to a RO "shadow fs_root"
+The lldb runtime harness settled the whole thing.
+
+### mnt_flag DOES gate writes (earlier "dead end" conclusion was wrong)
+Clean binary test: at apfs_vfsop_mountroot, StepOut, clear MNT_RDONLY in the root mount
+(mp+0x70: 0x1480d001 -> 0x1480d000), then breakpoint apfs_vnop_mkdir (0xfffffff02a8b6868).
+RESULT: apfs_vnop_mkdir WAS REACHED with ZERO "Read-only" serial errors -> VFS allowed the write.
+So VFS mnt_flag MNT_RDONLY is exactly the gate; clearing it works.
+
+### Why the earlier clears "failed": the root pivots to a RO shadow fs_root
+A hardware watchpoint on the cleared mount's mnt_flag (mp+0x70) fired later at pc
+0xfffffff02b34b34c (a memcpy/memset loop) writing 0x1480d000 -> 0x00000000: the ORIGINAL
+ramdisk-root mount struct is ZEROED/FREED. Serial confirms "root_pivot_occurred". This is the
+APFS ROSV mechanism ("apfs mounted RO and is the system volume of a volume group: creating the
+shadow fs_root", log at static 0xfffffff00a8e09f8): the read-only System volume mount is replaced
+by a SHADOW fs_root that is ALSO read-only, and fixup-mobile-tmp / dirhelper / SpringBoard's
+BaseBoardUI all write to THAT shadow root -> EROFS. Clearing the original mount's mnt_flag is
+useless after the pivot.
+
+### The fix (now precisely scoped)
+Make the SHADOW fs_root writable, one of:
+  (a) clear MNT_RDONLY (bit 0, offset 0x70) on the SHADOW mount, after the pivot -- need to catch
+      the shadow mount (created inside the ROSV path via the "setup shadow fs_root" call at
+      static 0xfffffff00a90f1c0), or resolve rootvnode->v_mount after the pivot; then a persistent
+      kernel patch that clears MNT_RDONLY on that mount, or
+  (b) patch the ROSV path so it does NOT create a read-only shadow (the gate at
+      0xfffffff00a8e08b4: ldrb w8,[x8,#0x17a]; tbz w8,#0), keeping the original mount, combined
+      with clearing MNT_RDONLY at the initial root mount (which is proven to work).
+lldb bug to avoid next time: SBWatchpoint has no SetScriptCallbackFunction; use
+`watchpoint command add -s python -o '<code>' <id>` via HandleCommand for an auto-continue
+re-clear, or a manual continue/re-clear loop.
+
+### Confirmed constants (reuse)
+kernel slide 0x20000000; struct mount mnt_flag @ +0x70; apfs_vfsop_mountroot 0xfffffff02a8eb380;
+apfs_vnop_mkdir 0xfffffff02a8b6868; ROSV log 0xfffffff00a8e09f8; shadow-root setup 0xfffffff00a90f1c0;
+mnt_flag finalizer (XNU) 0xfffffff02acf7248; gdbstub port opens ~90s in; ipsw disass needs --quiet.

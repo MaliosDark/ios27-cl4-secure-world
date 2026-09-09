@@ -1642,3 +1642,51 @@ Data mount, when it lands with the pre-populated /private/var skeleton, is the e
 
 Artifacts unchanged/clean: bootkc.md0.datavol (rwroot base, firmlinks ON), rootfs_data.dmg
 (System+Data group 52415645-..., /var skeleton), nopf4/rwroot/rootfs_with_cryptex.dmg intact.
+
+---
+
+## Option 1 (make mount-phase run as root) -- BLOCKED by code-signing + restore-mode-intrinsic-to-rd=md0
+
+Goal: run a privileged (root) mount of md0s2 in launchd's boot-task phase (before fixup), reusing
+the entitled/trusted path. Findings from disassembling /sbin/launchd (embedded boot-task plist +
+skip logic) and four boot tests:
+
+- The boot-task "Boot" config is an XML plist EMBEDDED IN THE launchd BINARY (not an editable file).
+  mount-phase-1/2 run the TRUSTED /sbin/mount with args baked in: `/sbin/mount -P 1` and `-P 2`
+  (the real phased volume mount). They have NO skip-condition keys.
+- They SKIP because of the restore-mode gate in the skip-decision (0x100044c98):
+  `if (restore_mode_flag[0x100087018]==1 && !task.PerformInRestore) -> skip`. mount-phase-1/2 lack
+  PerformInRestore, and this rd=md0 ramdisk boot IS restore mode, so they skip. restore-datapartition
+  HAS PerformInRestore (it runs, before fixup) but its Program /usr/libexec/HorizonSetup is absent.
+
+Three independent code-signing walls block every userspace way to change this (all enforced in
+this VM despite AMFI "not enforcing" for launch CONSTRAINTS):
+  1. Patch launchd's embedded plist (size-neutral add PerformInRestore to mount-phase-1/2, adhoc
+     re-sign, overwrite /sbin/launchd in place): boot panics
+     `init[1] fatal signal 9 -- namespace 9 code 0x1` -- the kernel SIGKILLs a modified pid-1
+     launchd (cdhash not in trust cache).
+  2. Drop a NEW binary at the restore-datapartition Program path (valid iOS arm64e, adhoc-signed):
+     `posix_spawn(): 85: Bad executable` -- AMFI trust-cache rejects the untrusted cdhash.
+  3. Symlink that Program path to an existing trusted binary (MobileStorageMounter): boot panics
+     `userspace panic: code signing identity mismatch for a boot-task (restore-datapartition,
+     /usr/libexec/HorizonSetup) observed=com.apple.MobileStorageMounter expected=com.apple.HorizonSetup`
+     -- launchd verifies each boot-task Program's code-signing IDENTITY against an expected value.
+  Boot-args: `cs_enforcement_disable=1` -> AMFI panic ("can't has cs_enforcement_disable");
+  `amfi_get_out_of_my_way=1` -> no effect (patched launchd still SIGKILLed).
+
+Root cause summary: to make mount-phase run I must either (a) modify launchd (blocked, wall 1), or
+(b) leave restore mode -- but restore mode is intrinsic to the rd=md0 ramdisk boot, and darwin-vm
+has NO block device (only the ramdisk), so the boot cannot be a normal on-disk boot. And the
+entitled mounter cannot be substituted into a boot-task slot (walls 2/3).
+
+Consequently the user/501-daemon EPERM question ("is it uid or APFS role/group policy?") is still
+UNANSWERED: every path that would run a mount AS ROOT is code-signing-gated before the mount runs.
+The only mount that executed ran as uid 501 (EPERM). Running mount_apfs as ROOT requires the
+boot-task phase (code-signing-locked to Apple binaries) or the kernel.
+
+Remaining options (all outside userspace, i.e. what was parked):
+  - Kernel-side mount/exec after apfs_vfsop_mountroot (the parked kernel_mount; needs XNU symbols).
+  - Kernel patch to AMFI/trust-cache to permit a custom root binary (kernel work).
+  - Add a real block device to darwin-vm/qemu so the boot is a normal on-disk boot (not rd=md0
+     restore mode) -> mount-phase-1/2 would then run /sbin/mount -P as root by Apple's own path.
+rootfs_data.dmg restored clean (System+Data group + /var skeleton, no code modifications).

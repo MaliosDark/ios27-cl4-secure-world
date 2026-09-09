@@ -138,23 +138,23 @@ gated on that flag so the normal-world XNU boot stays byte-for-byte unchanged.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Q as QEMU (-M darwin)
+    participant Q as QEMU darwin machine
     participant S as SPTM
-    participant X as XNU (bootkc)
+    participant X as XNU bootkc
     participant D as apple_dcp.c
     participant P as Panel
 
-    Q->>S: load SPTM + TXM, jump guarded EL2
+    Q->>S: load SPTM and TXM, jump guarded EL2
     S->>X: hand off to XNU, slide 0x20000000
-    X->>X: apfs mountroot (rd=md0)
-    X-->>D: init_rtkit_dcp then mailbox @0x412E00000 alive
-    loop ~25 fps
+    X->>X: apfs mountroot rd=md0
+    X-->>D: init_rtkit_dcp, mailbox 0x412E00000 alive
+    loop about 25 fps
         X-->>D: kernel console over UART tee
         D->>P: paint device id, progress ring, console, panic state
     end
     X->>X: exec /sbin/launchd
-    Note over X,P: launchd + hundreds of daemons run; SpringBoard launches
-    Note over X,P: APFS root mounts read-write; /private/var writable (goal 1 done)
+    Note over X,P: launchd and hundreds of daemons run, SpringBoard launches
+    Note over X,P: APFS root mounts read-write, /private/var writable, goal 1 done
 ```
 
 ---

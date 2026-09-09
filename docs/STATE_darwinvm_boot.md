@@ -1514,3 +1514,55 @@ Net: /private/var is writable ONLY once the Data volume (md0s2, RW) is mounted/s
 
 Artifacts (all separate): bootkc.md0.nopf4 (RO), bootkc.md0.rwroot (RW stub), rootfs_with_cryptex.dmg
 (original single-System), rootfs_data.dmg (System+Data, group 52415645-..., /var skeleton populated).
+
+---
+
+## Lever 2 (kernel_mount md0s2 at /private/var): feasibility CONFIRMED, blocked on stripped XNU symbols
+
+Per directive, pursued lever 2 (do NOT reverse MobileStorageMounter first; kernel_mount the Data
+volume). Prepared base KC firmware/bootkc.md0.datavol = copy of rwroot with the no-firmlinks patch
+REVERTED (firmlinks ON) + RW stub kept. Sanity boot (grouped rootfs_data.dmg): ROSV shadow fires,
+root RW (0x1480d000), firmlinks on, /var still EROFS -- correct base to add the Data mount.
+
+Mount contract recovered (disasm of com.apple.filesystems.apfs):
+- apfs_vfsop_mount(mp=x0, devvp=x1, data=x2, ctx=x3) selects the volume by the DEVICE VNODE
+  (devvp = /dev/md0sN), NOT by the mount-args blob (that carries only snapshot selection).
+- APFS publishes ONE IOMedia device per container volume ("/dev/%ss%d", M = fs_index+1;
+  container_get_dangling_mounts loops volumes 1..100), at container-probe time, independent of
+  mounting. So /dev/md0s2 (Data) is VISIBLE to XNU -> lever 2 is NOT impossible by the
+  "second slice invisible" criterion. handle_get_dev_by_role @ 0xfffffff00a8fd334 builds
+  /dev/<disk>s<idx+1> for a role (Data = 0x40).
+
+Blocker (symbol resolution, not device visibility):
+This iOS 27 RELEASE kernelcache is string/symbol-stripped for XNU core. To inject a kernel_mount /
+mount_common call I need the VAs of kernel_mount, vnode_lookup, and vfs_context_kernel/current.
+- kernel_mount __func__ ("kernel_mount"), vnode_lookup __func__: STRIPPED (not in the binary), so
+  no string anchor. nm shows only 611 fileset-export symbols (none of these). ipsw
+  `kernel symbolicate` with the blacktop/symbolicator sig DB reports "No valid signatures matched
+  kernelcache version" (the DB has kernel/25.0 and 25.6; iOS 27 build 24A5430a is too new) and
+  yields only C++ class symbols, not these C functions.
+- What IS anchor-findable: namei ("NAMEI_ROOTDIR is set but ni_rootdir is not"), and mount_common
+  (its __func__ "mount_common" survives at file 0x6d511 / VA 0xfffffff007071511, referenced by
+  adrp/add at 0xfffffff00acd45e4, inside the mount_common body). vfs_context_kernel /
+  vfs_context_current strings survive (file 0x4903bf7 / 0x48f395d) but are not yet tied to code.
+- Even with mount_common located, calling it needs ~10 constructed args (fstype "apfs", parent+
+  mountpoint vnodes for /private/var, componentname, fsmountargs, flags, kernelmount=1, ctx);
+  kernel_mount is the wrapper that does the path lookups but is exactly the stripped symbol.
+
+Net: lever 2 as a hand-injection is feasible in principle (md0s2 visible; mount_common found) but
+requires resolving kernel_mount + vnode_lookup + vfs_context in a stripped iOS-27 KC via signature
+RE, then a large code-cave injection (multi-arg mount call + /dev/md0s2 devvp + timing before
+fixup at ~16 s). This is a big, error-prone effort blind; it is dramatically faster/safer with an
+iOS-27 symbol source (KDK, a matching symbols.json, or an updated signature set).
+
+Options to proceed (need a decision):
+  2a. Provide an iOS-27 symbol source (KDK / symbols.json / updated blacktop sigs) -> resolve
+      kernel_mount+vnode_lookup+vfs_context deterministically, then do the injection. Fastest/safest.
+  2b. Grind signature-RE to resolve those three from surviving anchors (namei/mount_common as
+      anchors + call-graph). Slow, uncertain.
+  1'. Revisit lever 1: MobileStorageMounter is a normal userspace Mach-O (full strings/symbols);
+      its mount-phase-1/2 skip under rd=md0 may be a simple boot-arg/condition. No kernel symbols
+      needed. Deprioritized by directive, but becomes attractive since 2 is symbol-blocked.
+
+Artifacts: bootkc.md0.datavol (rwroot base, firmlinks reverted ON), rootfs_data.dmg (System+Data,
+group 52415645-..., /var skeleton), nopf4/rwroot/rootfs_with_cryptex.dmg unchanged.

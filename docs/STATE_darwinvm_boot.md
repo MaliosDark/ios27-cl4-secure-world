@@ -1727,3 +1727,30 @@ launchd/trust-cache mechanism is proven and reusable for any Apple mount path we
 Reusable mechanism proven this session: patch a system binary size-neutrally -> adhoc sign ->
 add its cdhash to ramdisk.tc via build_tc.py -> AMFI accepts it. This unlocks controlled userspace
 patches without cs_enforcement_disable (which panics).
+
+---
+
+## [GOAL 1] AMFI beaten (mount runs as root); Data-volume exposure is the last piece
+
+Product goals: (1) /private/var writable, (2) SpringBoard > 5 min, (3) guest pixels.
+
+Toward (1), this session established:
+- TRUST CACHE beats AMFI: adding the patched-launchd cdhash to ramdisk.tc (build_tc.py) lets init
+  live and mount-phase-1/2 run Apple's trusted /sbin/mount (or mount_apfs) AS ROOT. Reusable to run
+  any trusted binary as root in the boot-task phase. Do NOT re-fight AMFI or cs_enforcement_disable.
+- The /private/var block is NOT role- or MNT_RDONLY-based: clearing the System volume's apfs_role
+  (data-only edit) + root-RW KC still EROFS. It genuinely needs the DATA volume mounted.
+- The Data volume (md0s2) is in the container NX (group formed, ROSV fires) but is NOT exposed as a
+  device: the kernel only enumerates md0s1; mount_apfs as root -> ENOENT (device absent), mount -P ->
+  "missing data volume". /dev/md0s2 does not exist.
+- XNU creates extra md devices only via `mdevadd` (kernelcache has "md%d" + "mdevadd", but "RAMDisk"
+  appears ONCE) -> a SECOND qemu memory-map RAMDisk entry will NOT auto-create /dev/md1. So the
+  naive md1 clone does not work by itself.
+- BUT /usr/sbin/hdik EXISTS on the rootfs (trusted) and drives the kernel md driver (mdevadd) from
+  userspace. So the trust-cache mechanism can run hdik as root at boot-task time to attach a small
+  Data image as /dev/mdX, then mount it at /private/var -- no kernel patch, no qemu change, no NVMe.
+  apfs_boot_util and apfs.util are also present (container-based mount helpers) as alternatives.
+
+Next (one boot): trust-cache launchd runs hdik to attach a small Data image -> mount at /private/var.
+Success criterion (goal 1): fixup-mobile-tmp with no "Read-only file system".
+Frozen artifacts untouched: nopf4, rwroot, datavol, rootfs_data.dmg.

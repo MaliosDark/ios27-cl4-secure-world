@@ -1,4 +1,10 @@
-# iOS 27 Secure-World Bring-up on an Intel Mac
+# iOS 27 on Intel QEMU, SpringBoard, no Apple Silicon
+
+**iOS 27 booting to SpringBoard on an ordinary Intel Mac under QEMU -- no Apple Silicon, no
+device.** vphone needs Apple Silicon; this is the copyable path for the Intel Macs most people
+already have. Definition of done, in order: (1) `/private/var` writable (fixup-mobile-tmp, no
+EROFS); (2) SpringBoard stays up > 5 minutes with no 3-strike reboot; (3) guest pixels in the QEMU
+window (IOMFB blit or VNC of the guest framebuffer -- the boot-log painter does not count).
 
 > **CURRENT STATE (2026-09-09):** Full iOS 27 userspace boots. Hundreds of daemons run and
 > SpringBoard now launches and runs for about 60-90 s of guest time (it used to crash-loop at

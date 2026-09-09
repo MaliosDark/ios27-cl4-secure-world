@@ -6,24 +6,6 @@ already have. Definition of done, in order: (1) `/private/var` writable (fixup-m
 EROFS); (2) SpringBoard stays up > 5 minutes with no 3-strike reboot; (3) guest pixels in the QEMU
 window (IOMFB blit or VNC of the guest framebuffer -- the boot-log painter does not count).
 
-> **CURRENT STATE (2026-09-09):** Goals 1 and 2 are DONE. `/private/var` is writable and
-> fixup-mobile-tmp runs with NO EROFS; the whole boot log has zero "Read-only file system" errors
-> (previously fixup-mobile-tmp, lockdown.sock, vpncontrol.sock and mDNSResponder all failed EROFS).
-> With writable /private/var the crash-loop stops: SpringBoard spawns once and stays up past 12 min
-> of guest time (criterion is 5 min), single stable instance, no 3-strike reboot, no panic. Goal 2
-> turned out to be a downstream symptom of goal 1. Next frontier is goal 3 (guest pixels).
->
-> The real root cause was found and fixed with two instructions (bootkc.md0.rwlivefs, a copy). Every
-> rootfs is born read-only in the generic root-mount path (vfs_rootmountalloc_internal sets
-> MNT_RDONLY | MNT_ROOTFS); apfs_vfsop_mount reads that flag at mount time and records read-only in
-> its OWN private mount state, so clearing the VFS flag AFTER mount (the earlier stub) left every
-> apfs transaction returning EROFS. The fix: (1) clear MNT_RDONLY on the mount struct BEFORE the
-> apfs mount worker runs, so apfs is asked for read-write; (2) bypass apfs_mount_livefs's explicit
-> refusal "can't mount root filesystem writeable" (a single tbnz gate at 0xa93886c -> always allow).
-> apfs then mounts the single live volume read-write (this boot uses no sealed snapshot), so
-> /private/var is writable with no separate Data volume required. This supersedes the earlier
-> Data-volume / volume-group / mount-phase line entirely. Live source of truth:
-> `docs/STATE_darwinvm_boot.md`. Text below this banner predates this and is kept for history.
 
 
 > **About:** Booting iOS 27 to its real root filesystem on an Intel Mac via
@@ -360,6 +342,26 @@ board.html    visual "motherboard" of the secure world
 ```
 
 ---
+
+> **CURRENT STATE (2026-09-09):** Goals 1 and 2 are DONE. `/private/var` is writable and
+> fixup-mobile-tmp runs with NO EROFS; the whole boot log has zero "Read-only file system" errors
+> (previously fixup-mobile-tmp, lockdown.sock, vpncontrol.sock and mDNSResponder all failed EROFS).
+> With writable /private/var the crash-loop stops: SpringBoard spawns once and stays up past 12 min
+> of guest time (criterion is 5 min), single stable instance, no 3-strike reboot, no panic. Goal 2
+> turned out to be a downstream symptom of goal 1. Next frontier is goal 3 (guest pixels).
+>
+> The real root cause was found and fixed with two instructions (bootkc.md0.rwlivefs, a copy). Every
+> rootfs is born read-only in the generic root-mount path (vfs_rootmountalloc_internal sets
+> MNT_RDONLY | MNT_ROOTFS); apfs_vfsop_mount reads that flag at mount time and records read-only in
+> its OWN private mount state, so clearing the VFS flag AFTER mount (the earlier stub) left every
+> apfs transaction returning EROFS. The fix: (1) clear MNT_RDONLY on the mount struct BEFORE the
+> apfs mount worker runs, so apfs is asked for read-write; (2) bypass apfs_mount_livefs's explicit
+> refusal "can't mount root filesystem writeable" (a single tbnz gate at 0xa93886c -> always allow).
+> apfs then mounts the single live volume read-write (this boot uses no sealed snapshot), so
+> /private/var is writable with no separate Data volume required. This supersedes the earlier
+> Data-volume / volume-group / mount-phase line entirely. Live source of truth:
+> `docs/STATE_darwinvm_boot.md`. Text below this banner predates this and is kept for history.
+
 
 ## Legal / safety
 

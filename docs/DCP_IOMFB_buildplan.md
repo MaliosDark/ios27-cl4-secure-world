@@ -264,3 +264,39 @@ Next steps for this brick:
 Only after the mailbox handshake starts do Stages B..E (AFK, IOMFB RPC, swap, present)
 become reachable. This remains a large, multi-brick effort with unknown iOS-27 protocol
 layouts past the handshake.
+
+## Stage A progress, iteration 3 (this session): the boot is power-state deferred
+
+Traced RTBuddyV2::start itself. The "RTBuddy(%s): start(%p)" format string
+(0x7b21d69) is loaded at 0xa7bb7d0, inside RTBuddyV2::start at 0xa7bb728. Under lldb,
+break at 0xfffffff02a7bb728, read the provider (x0) at entry and finish to read the
+return value:
+  HIT 1 provider 0xffffffe5bd906000 -> start() returns 1 (true)
+  HIT 2 provider 0xffffffe5bd900000 -> start() returns 1 (true)
+Both RTBuddies (ANS2 and DCP) start() SUCCEED. No REQUIRE-failed line appears in the
+serial. So start() does not fail; it attaches and DEFERS the coprocessor boot.
+
+This is the key correction: RTBuddy is not stuck or failing in start(). The ASC
+coprocessor boot (map ASC regs, power on, load firmware into SRAM, write CPU_CONTROL
+RUN, wait for HELLO) is driven from the IOKit power-state transition
+(setPowerState to on), not from start(). That power-on is never requested, so the
+boot function is never called and the guest never writes the ASC mailbox (consistent
+with our apple_rtkit trace showing zero mailbox MMIO through 5 minutes).
+
+On iOS the DCP power-on is requested by the display stack / IOMobileFramebuffer when
+it brings up the panel. IOMFB does not complete: the userspace IOMFB_FDR_Loader
+(/usr/bin/IOMFB_FDR_Loader, loads the panel Factory Data Record) runs ~126 s and
+exits(1) every boot. So the confirmed gate is the IOMFB init / FDR chain, upstream of
+the DCP power-on:
+  IOMFB_FDR_Loader exit(1) -> IOMFB never finishes init -> nothing requests DCP power
+  -> RTBuddy's deferred coprocessor boot never fires -> no mailbox handshake.
+
+Concrete next brick (the FDR chain): find why IOMFB_FDR_Loader exits(1). It is a
+userspace binary in the rootfs; its FDR source is effaceable storage / a calibration
+record that the VM does not provide. Options: provide or stub the FDR backing so the
+loader succeeds; or make IOMFB not require FDR; or, bypassing IOMFB, drive the DCP
+power-on directly (force RTBuddy's setPowerState-to-on path, e.g. a bootkc patch that
+calls the coprocessor-boot function from start, once that function is identified by
+finding the ASC CPU_CONTROL (reg+0x44, RUN bit) write in the RTBuddy code). Any of
+these only reaches the START of the mailbox handshake; Stages B..E (AFK, IOMFB RPC,
+swap, present) with unknown iOS-27 layouts remain beyond it.

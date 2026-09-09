@@ -1140,3 +1140,16 @@ fs_root", log at static 0xfffffff00a8e09f8) is what decides this for the System-
 Host-side alternatives remain closed: `diskutil apfs changeVolumeRole` is refused (-69599), and a
 Data-volume split needs real restructuring (this rootfs has NO /usr/share/firmlinks, no
 /System/Volumes/Data, one System-role volume, and /private/var is a real dir on it).
+
+## 2026-09-09 (cont.) -- APFS volume-RO scan: getter object is NOT a direct field of mp
+Re-confirmed mnt_flag = 0x1480d001 after mountroot (stable across boots). Tried to reach APFS's
+volume read-only bit by scanning the struct mount (mp, first 0x800 bytes) for a kernel pointer
+whose [+0x128] had bit 28 set: NONE found. So the "is-readonly" getter at static
+0xfffffff00a8eb330 gets its object at runtime via `bl 0xfffffff00a997154; bl 0xfffffff00a996c64`
+(x20 = result), i.e. the object with [+0x128] is derived from mp through those two accessors, not
+a direct slot in struct mount.
+NEXT: at the mountroot breakpoint, single-step/emulate those two calls (or read mp's apfs private
+data pointer -> mnt_data, typically at a fixed struct-mount offset) to get the apfs volume/mount
+object, then clear bit 28 of its +0x128 and re-test. Alternatively set a hardware WATCHPOINT on
+mnt_flag (mp+0x70) to catch every writer and confirm which code path finalises 0x1480d001, then
+target the APFS write-vnop EROFS check (the "!apfs->apfs_readonly" path) directly.

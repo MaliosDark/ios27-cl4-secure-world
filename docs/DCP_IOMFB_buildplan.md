@@ -300,3 +300,50 @@ calls the coprocessor-boot function from start, once that function is identified
 finding the ASC CPU_CONTROL (reg+0x44, RUN bit) write in the RTBuddy code). Any of
 these only reaches the START of the mailbox handshake; Stages B..E (AFK, IOMFB RPC,
 swap, present) with unknown iOS-27 layouts remain beyond it.
+
+## Stage A/B iteration 4 (this session): the full gate chain, down to VM-mode PM
+
+Pursued both the FDR path (A) and the direct-power-on path (B); they converge on one
+root. Mounted the rootfs read-only and reverse-engineered /usr/bin/IOMFB_FDR_Loader
+(arm64e, 328 KB, launched by an IOKit matching event on IOMFB publishing the
+IOMFBLaunchFDR property):
+- It needs a live display instance: strings "Failed to get panel_id", "Failed to get
+  als_id", "Failed to create acss_id", "Failed to get DIC id", "Loading embedded
+  instance %d", "All done display instance %d". panel_id/als_id/DIC come from the
+  booted DCP/panel. No booted DCP -> no panel_id -> the loader cannot proceed.
+- Its real FDR source is effaceable NAND via AppleNVMeEAN: "IOServiceOpen on
+  AppleNVMeEAN failed", "Get EANSize failed", "Read EAN failed", "ean_open". We boot
+  from a RAM ramdisk with no NVMe/ANS storage, so EAN open fails.
+- It has fallbacks ("No matching FDR data, using default", "using default"), so EAN is
+  not necessarily fatal; the fatal path is the missing display instance (no panel_id).
+So A (the FDR loader) is DOWNSTREAM of B (the DCP boot), not upstream: it needs the
+DCP already booted to read panel data. Fixing FDR does not boot the DCP.
+
+B (the DCP coprocessor boot) is therefore the true gate, and it traces down to
+platform power management. New evidence:
+- Both RTBuddies (DCP and ANS2) start() succeed and both defer their coprocessor boot;
+  neither ever drives its ASC mailbox. It is not DCP-specific.
+- With DARWIN_PMGR=1 the guest makes ZERO reads and ZERO writes to our emulated PMGR
+  registers, yet the OS boots fine. So the guest is not using our PMGR to gate power.
+- The serial shows "AMFI: Booted in a VM" and, crucially,
+  "AMFI: skipping PMGRAON latch due to AVP". The guest detects the Apple Virtual
+  Platform (AVP) and SKIPS PMGR power operations. In VM mode the coprocessor power /
+  bring-up path is different from real hardware: it is expected to be provided by the
+  virtual platform (as Apple's own Virtualization.framework does for the paravirtual
+  vphone), not driven through emulated PMGR the way real iBoot/XNU would.
+
+Conclusion / the complete goal-3 gate chain, from pixels down:
+  guest pixels
+   <- DCP produces frames (IOMFB swap_submit -> DART -> compressed surface -> present)
+   <- IOMFB completes init (needs FDR/panel data, needs a booted DCP)
+   <- DCP coprocessor is booted (ASC mailbox HELLO handshake)
+   <- RTBuddy runs its deferred coprocessor-boot (setPowerState to on)
+   <- the platform powers on the DCP power domain
+   <- BUT in VM mode ("AVP") the guest skips PMGR and expects the virtual platform to
+      handle coprocessor power/bring-up, which this emulation does not model.
+So the deepest brick is VM-mode platform bring-up of the DCP coprocessor: model what
+the guest's AVP path expects (the coprocessor presented already powered/booted, or the
+specific VM power handshake), so RTBuddy proceeds to set up and drive the ASC mailbox.
+Only then do the AFK/EPIC/IOMFB/swap/DART/decompress stages (with unknown iOS-27
+layouts) become reachable. This is Asahi-scale reverse engineering for an A14+ DCP that
+no public project has done; it is a multi-session frontier, now fully mapped here.

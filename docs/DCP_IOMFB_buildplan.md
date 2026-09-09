@@ -494,3 +494,39 @@ D. Boot; watch the guest IOKit matching for AppleParavirtGPU attaching to our de
 This supersedes the DCP-coprocessor line for goal 3. The DCP analysis (Stages A/B iters
 1..6) remains valid as the proof that the physical path is a dead end in a VM, which is
 what pointed here.
+
+## Paravirtual path, reconnaissance complete: AppleParavirtGPU lives in the aux kernelcache
+
+Followed the paravirtual pivot down. AppleParavirtGPU has NO IOKit personality in the boot
+kernelcache __PRELINK_INFO (which is a plain XML _PrelinkInfoDictionary): searching it for
+ParavirtGPU / Paravirt / VirtIO / virtio / ParavirtualizedGraphics / AppleVirtualPlatform
+returns zero personalities (only an unrelated IODPTXVirtualPort). The class name appears once
+in a class-registration table, so the code is referenced but the matching driver + its
+personality are not in the boot KC. iOS splits its kernelcache: the paravirtual / VM-mode
+drivers (AppleParavirtGPU, AppleVirtIOAgentDevice, AppleVirtIONeuralEngineDevice) live in the
+AUXILIARY kernelcache loaded later from /System/Library/KernelCollections in the rootfs, and
+they are enumerated by an undocumented VM-platform mechanism (no AppleVirtualPlatform/virtio
+personality is public or in the boot KC).
+
+Net reconnaissance for goal 3 (both paths mapped):
+- DCP path: dead end in a VM. RTBuddy(DCP) attaches but its coprocessor boot is power-plane
+  deferred and never triggered; AMFI skips the PMGRAON latch "due to AVP". iOS does not power
+  the physical DCP in a VM by design. (Stages A/B iters 1..6.)
+- Paravirtual path: the correct direction and Apple's actual VM design, and the host pieces
+  exist (apple-gfx-mmio compiled, ParavirtualizedGraphics.framework present). But it is also a
+  deep, undocumented build: (1) AppleParavirtGPU's match/personality is in the aux kernelcache,
+  not the boot KC, and must be recovered from there; (2) it is enumerated by an undocumented
+  VM-platform bus, not a simple DT node; (3) the Apple ADT parser here cannot add nodes at
+  runtime; (4) a fundamental viability risk: apple-gfx is a shim over Apple's host PVG
+  framework, macOS-guest-proven only, and it is unverified whether an iOS guest's
+  AppleParavirtGPU is protocol-compatible and whether PVG runs host-side on an Intel Mac with
+  an iOS guest (Apple never officially supported iOS VMs and its iOS-VM notes say the GPU is
+  not emulated).
+
+Honest bottom line: goal 3 (guest pixels) on iOS 27 / t8140 is a genuine, multi-unknown
+research frontier by BOTH paths, with the paravirtual path being the right but still large and
+risk-bearing direction. The next concrete build steps (recover AppleParavirtGPU's aux-KC match,
+model the VM-platform enumeration, wire apple-gfx-mmio, verify PVG-on-Intel) are a dedicated,
+multi-session engineering effort whose feasibility hinges on the unverified PVG-iOS-on-Intel
+question. This document is the complete map for that effort. Goals 1 and 2 are done and
+independent of this.

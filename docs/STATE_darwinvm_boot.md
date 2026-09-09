@@ -1190,3 +1190,35 @@ re-clear, or a manual continue/re-clear loop.
 kernel slide 0x20000000; struct mount mnt_flag @ +0x70; apfs_vfsop_mountroot 0xfffffff02a8eb380;
 apfs_vnop_mkdir 0xfffffff02a8b6868; ROSV log 0xfffffff00a8e09f8; shadow-root setup 0xfffffff00a90f1c0;
 mnt_flag finalizer (XNU) 0xfffffff02acf7248; gdbstub port opens ~90s in; ipsw disass needs --quiet.
+
+## 2026-09-09 -- shadow fs_root RDONLY is set at CREATION (not via vfs_setflags); enforcement helper mis-ID'd
+Two more negative results narrow the fix to a single remaining needle:
+- Clearing MNT_RDONLY in w8/memory at EVERY vfs_setflags store (0xfffffff02acf7244/48, breakpoint
+  callback via SBBreakpoint.SetScriptCallbackFunction, both register-write and memory-write
+  variants) did NOT prevent the RO: writes still fail at fixup-mobile-tmp (~line 292 / 21s guest),
+  SpringBoard still crash-loops. => the SHADOW fs_root mount gets MNT_RDONLY at mount CREATION
+  (a direct mnt_flag init), bypassing vfs_setflags. The vfs_setflags path only builds up the
+  ORIGINAL mount's flags.
+- 0xfffffff00af58ddc (the helper the 0xaf6c... EROFS cluster calls) is a NAME/PATH validator
+  (parses 0xff/0xfe markers), NOT the RDONLY write-reject. That EROFS cluster is not the gate.
+
+### What is proven / where the fix is
+PROVEN: mnt_flag MNT_RDONLY (mount+0x70, bit0) IS the write gate. Clearing it on the initial root
+mount lets apfs_vnop_mkdir (0xfffffff02a8b6868) be reached with ZERO RO errors. The ONLY reason
+writes still fail is the pivot to a read-only SHADOW fs_root (ROSV), whose mnt_flag RDONLY is set
+when that mount is allocated.
+REMAINING NEEDLE: clear MNT_RDONLY on the SHADOW mount. Options, in order of promise:
+  1. Find rootvnode->v_mount AFTER the pivot (or catch the shadow mount at its allocation inside
+     the "setup shadow fs_root" call, static 0xfffffff00a90f1c0) and clear mount+0x70 bit0 there.
+  2. Static-patch the ROSV gate (0xfffffff00a8e08b4: ldrb w8,[x8,#0x17a]; tbz w8,#0) so no RO
+     shadow is created, keeping the original mount, plus clear/patch the initial-mount RDONLY.
+  3. Find the actual VFS RDONLY write-reject (mnt_flag & MNT_RDONLY -> EROFS; the small
+     vfs_isrdonly-style test was not found by "ldr w0,[x0,#0x70]+and #1+ret", so it is inlined in
+     vnode_authorize) and neutralize it -- one patch covers all mounts.
+
+### Confirmed runtime harness (all reusable, all verified this session)
+kernel slide 0x20000000; struct mount mnt_flag @ +0x70; apfs_vfsop_mountroot 0xfffffff02a8eb380
+(x0=mp); apfs_vnop_mkdir 0xfffffff02a8b6868; vfs_setflags store 0xfffffff02acf7244; mnt_flag
+finalizer/zeroer seen at 0xfffffff02b34b34c; ROSV log 0xfffffff00a8e09f8; shadow setup
+0xfffffff00a90f1c0. gdbstub port opens ~90s in; ipsw disass MUST use --quiet (markup hangs);
+SBWatchpoint has NO SetScriptCallbackFunction but SBBreakpoint does; StepOut works in a script.

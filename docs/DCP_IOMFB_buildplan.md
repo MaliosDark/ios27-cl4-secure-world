@@ -615,3 +615,49 @@ Full build roadmap from here (each a real, multi-brick stage):
 Honest scope: stage 1 (force) is the immediate concrete brick and is buildable via the
 code-cave. Stage 3 (the iOS-27 IOMFB protocol) is the Asahi-scale, multi-session part. This is
 the real build; it advances brick by brick, not in one turn.
+
+---
+
+## MILESTONE: full iOS UI stack boots; goals 1 and 2 confirmed live; goal 3 gate corrected
+
+Verified in a single full-OS boot (rootfs_with_cryptex.dmg + bootkc.md0.disp
+[writable-root fix + secureproxy_v2] + dtree_ios, env DARWIN_AIC=1 DARWIN_DART=1
+DARWIN_DISP=all DARWIN_RTKIT=1 DARWIN_FB=1 DARWIN_DCPFW, memory 20G):
+
+- The dyld shared cache now MAPS ("dyld cache mapped system-wide: customer"). The prior
+  "(null) not loaded" wall is gone; the earlier dyld-cache symlink fix cleared it. The
+  residual "auth GOTs: unmapped" plus check_np errno 12 is a non-fatal warning and
+  launchd continues.
+- GOAL 1 (writable /private/var) confirmed live: launchd runs the "fixup-mobile-tmp"
+  boot task Doing then Finished, then "Early boot complete. Continuing system boot." No
+  EROFS.
+- GOAL 2 (SpringBoard up, no three-strike reboot) confirmed live: the full UI stack
+  spawns (com.apple.SpringBoard "launching: system support", backboardd as pid 44,
+  IOMFB_FDR_Loader), and the boot stays alive to guest time 00:09:00 (9 minutes) with
+  zero SpringBoard exit events and zero reset markers. Every apparent panic string is a
+  false positive (spawn-panic-crash-behavior plist keys, the watchdogd process name,
+  non-enforcing AMFI launch-constraint violations).
+
+Goal 3 gate, now observed in the correct context (full boot, real IOMFB client):
+RTBuddy(DCP)::start() still parks at waitForMatchingService for the secure-world
+SecureRTBuddyDCP service, which never publishes here. So RTBuddy(DCP) never registers
+its service, IOMFB and AppleCLCD never attach, the coprocessor is never taken out of
+reset (no CPU_CONTROL RUN, no mailbox traffic), and there is nothing to scan out. This
+is upstream of the QEMU IOMFB work in the staged plan above: the mailbox cannot go live
+until RTBuddy(DCP)::start() completes.
+
+Settled dead ends (do not revisit):
+- XNU linear boot framebuffer is dead on iOS 27. boot_args.Video is wired correctly
+  (v_baseAddr, the /vram device-tree reg, display-scale) yet a dump of the guest
+  framebuffer region through full userland is all zeros. iOS 27 draws nothing to a CPU
+  framebuffer; display is entirely DCP. The boot-log painter is not a substitute.
+- The old route_timeout / route / route_skip kernel experiments are superseded by
+  secureproxy_v2 and must not be stacked on it: doing so panics early in
+  AppleARMLightEmUp::start (kernel data abort, faulting address 0x8) before RTBuddy(DCP)
+  even starts, by perturbing driver-match ordering.
+
+Corrected next step for goal 3: make RTBuddy(DCP)::start() complete WITHOUT perturbing
+driver matching, by publishing a stub SecureRTBuddyDCP IOService so
+waitForMatchingService resolves for real (rather than forcing the wait to return null
+and then chasing downstream null-guards). Only then does the mailbox go live and the
+staged IOMFB scanout work begin.

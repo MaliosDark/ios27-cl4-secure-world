@@ -700,3 +700,32 @@ Next brick: locate RTBuddy(DCP)'s "route powered, take coprocessor out of reset,
 CPU_CONTROL RUN" decision and either satisfy the power-state op with a powered return or
 bypass the power gate to drive the coprocessor boot directly. bootkc.md0.pub is the clean,
 panic-free base to patch on, with goals 1 and 2 intact.
+
+---
+
+## PROGRESS: route-loop fixed with a CBZ retarget; mailbox still silent (power-on not reached)
+
+Runtime debugging (lldb over the gdbstub) settled two things on the publish build:
+- SecureRTBuddyProxy::start is never called (its driver does not match in this VM), so the
+  publish patch was dead code.
+- RTBuddy(DCP) blocks inside waitForMatchingService and never returns.
+
+So the wait must be made non-blocking. Disassembly of the route loop shows the branch that
+fires on a null resolved route leads to a fatal assert, while the loop's own success path
+continues to the next route. The clean fix is a single-instruction retarget of that branch so a
+missing secure route is treated as handled and the loop continues, combined with the poll-once
+wait timeout, the AppleARMLightEmUp null-array guard, and the existing secure-route null guard.
+
+Result: no panic, the route loop completes, RTBuddy(DCP) starts, backboardd runs, and the boot
+stays healthy for nine minutes with goals 1 and 2 intact. But the DCP mailbox is still silent:
+no CPU_CONTROL write, no HELLO. Completing the route loop does not by itself drive the
+coprocessor power-on.
+
+Corroborating, the storage coprocessor (which works through a faked NVMe boot status) also
+produces no mailbox traffic, so the low-level power-on write is apparently not exercised for any
+coprocessor in this VM. Leading hypothesis: the kernel treats the coprocessor as already running
+and the power-on method early-returns without writing CPU_CONTROL. Next step is to breakpoint
+the power-on method and the register writer at runtime to see which guard skips the write, and in
+parallel to consider having the emulated coprocessor announce itself once the driver attaches,
+rather than waiting to be taken out of reset. The route-fixed kernelcache is the clean base for
+that work.

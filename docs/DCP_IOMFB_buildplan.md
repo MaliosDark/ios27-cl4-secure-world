@@ -757,3 +757,36 @@ Two remaining options for goal 3, both real work:
 
 The route-fixed kernelcache (route loop clean, goals 1 and 2 intact, full UI up for nine
 minutes) is the base for the pragmatic path.
+
+---
+
+## Power-on path is reachable and null-safe; blocker is the PM power-up issuance
+
+Static call-graph analysis (reliable) established the reset-deassert chain: the CPU_CONTROL
+writer is called only by the coprocessor power-on method, whose sole caller sits inside RTBuddy's
+setPowerState state machine on the power-up command branch. That entire power-up branch was
+traced to fall through to the power-on call even when the secure route is null, with no early
+return. So if a power-up is ever issued to the display RTBuddy, the coprocessor comes out of
+reset regardless of the null route.
+
+Correction to the earlier idea: the route-ready checks are all gated behind a non-null secure
+route, so with the route bypassed they are dead code and must not be patched.
+
+The real blocker is that nothing issues the power-up command to the display RTBuddy. It is
+IOKit power-management mediated, and RTBuddy requests power-up only after its route reports
+powered, which is the chicken-and-egg with the null route. The exact power-management issuance
+gate was not isolated from static analysis alone, and runtime observability is unavailable in
+this environment: neither software nor hardware breakpoints over the emulator debug stub fire on
+kernel addresses (the guest runs to the graphical stack with zero hits), so the debugger cannot
+watch the power-management calls.
+
+Remaining options for goal 3, all real work: implement the secure-world power-state responder so
+the real route reports powered; or force the power-up issuance for the display RTBuddy after
+isolating the gate (via compiled-in serial instrumentation patched into the RTBuddy
+power-management entry points, since the debugger is unusable, or further static analysis); or a
+code-cave that drives the power-up directly from the driver's start tail. The downstream path is
+proven reachable and null-safe, and the existing mailbox and IOMFB model plus a small polarity
+adjustment take over once the coprocessor is powered.
+
+Goals 1 and 2 remain delivered and verified. Goal 3 is reduced to this single power-management
+issuance gate on the route-fixed kernelcache base.

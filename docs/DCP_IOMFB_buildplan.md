@@ -661,3 +661,42 @@ driver matching, by publishing a stub SecureRTBuddyDCP IOService so
 waitForMatchingService resolves for real (rather than forcing the wait to return null
 and then chasing downstream null-guards). Only then does the mailbox go live and the
 staged IOMFB scanout work begin.
+
+---
+
+## PROGRESS: AppleARMLightEmUp panic fixed; SecureRTBuddyProxy publish applied; gate still closed
+
+Built firmware/bootkc.md0.pub = bootkc.md0.disp (writable-root + secureproxy_v2) plus:
+
+1. SecureRTBuddyProxy publish patch (from static analysis of SecureRTBuddyProxy::start at
+   file offset 0x3823df4): NOP the exclaves-down short-circuit (b.eq at file offset
+   0x3824014) and retarget the missing-exclave-endpoint branch (cbz at 0x3824114) to the
+   finalize/publish block 0xa8282d0, so the proxy nub reaches registerService even without
+   a live secure world. The finalize block does not dereference the null tightbeam fields.
+2. Null-array guard for the AppleARMLightEmUp::start panic. Both the earlier route patches
+   and this publish patch tripped a kernel data abort at pc 0xb03078c (fault address 0x8):
+   a dispatch loop whose count global is >= 1 while its array pointer global is null. The
+   instructions before the load are signed-pointer canonicalization (not inert under the
+   no-PAC boot: the movk really executes and poisons the pointer). Correct fix, verified by
+   disassembly: change the b.eq at 0xb030784 to cbz x8, loop-end (skip the loop when the
+   array pointer is null) and replace the movk at 0xb030788 with nop so a valid pointer
+   reaches the load uncorrupted.
+
+Result booting bootkc.md0.pub with the full rootfs: no panic, goal 1 still live
+(fixup-mobile-tmp), RTBuddy(DCP) starts, backboardd reaches running, boot healthy to ten
+minutes. But the DCP gate stays closed: no CPU_CONTROL RUN, no mailbox traffic, and no
+IOMobileFramebuffer or RTBuddyService attach in the serial. Publishing the proxy did not by
+itself make RTBuddy(DCP)::start complete and boot the coprocessor.
+
+Diagnosis: RTBuddy takes the coprocessor out of reset (writes CPU_CONTROL RUN) only after
+the route reports powered, through the rtbuddyservice power-state handshake. A bare publish
+or a null/skipped secure route never reports powered, so the RUN write never happens.
+Corroborating, RTBuddy(ANS2) has no secure route and works, yet the QEMU ANS mailbox also
+sees no traffic, because ANS storage is satisfied through a faked NVMe BOOT_STATUS rather
+than a live RTKit handshake. So the mailbox RUN write we watch for is produced only once
+RTBuddy genuinely powers the coprocessor on.
+
+Next brick: locate RTBuddy(DCP)'s "route powered, take coprocessor out of reset, write
+CPU_CONTROL RUN" decision and either satisfy the power-state op with a powered return or
+bypass the power gate to drive the coprocessor boot directly. bootkc.md0.pub is the clean,
+panic-free base to patch on, with goals 1 and 2 intact.

@@ -729,3 +729,31 @@ the power-on method and the register writer at runtime to see which guard skips 
 parallel to consider having the emulated coprocessor announce itself once the driver attaches,
 rather than waiting to be taken out of reset. The route-fixed kernelcache is the clean base for
 that work.
+
+---
+
+## DEFINITIVE: bypassing the route is not enough; RTBuddy drives no coprocessor bring-up
+
+Reliable evidence (a logging MMIO stub compiled into the machine, since kernel breakpoints do
+not install over this gdbstub): across a full boot of the route-fixed kernelcache, the guest
+makes exactly one DCP-related hardware write, a single value 0x10 to a dcp expert register, and
+zero writes to the ASC CPU_CONTROL register at any window, and no mailbox activity at all.
+
+So making the service wait non-blocking and letting the route loop complete is necessary but
+not sufficient. RTBuddy brings the display coprocessor out of reset only after its route
+reports powered, through the rtbuddyservice power-state protocol. With a null or bypassed route
+there is no powered report, so RTBuddy never programs the mailbox and never starts the
+handshake. The lone expert-register write is a power-domain poke from another driver, not the
+coprocessor run signal.
+
+Two remaining options for goal 3, both real work:
+
+- Faithful: implement the exclaves and Tightbeam rtbuddyservice power-state responder so the
+  real route reports powered. Largest path; needs the secure-world transport modeled.
+- Pragmatic: kernel-patch RTBuddy's power-state decision so the route reads as powered and
+  RTBuddy proceeds to program the mailbox, after which the existing mailbox and IOMFB model and
+  a small model polarity or self-announce tweak take over. Smaller, but another RTBuddy patch
+  cycle, and the stub route object needs its post-powered field reads guarded.
+
+The route-fixed kernelcache (route loop clean, goals 1 and 2 intact, full UI up for nine
+minutes) is the base for the pragmatic path.

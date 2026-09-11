@@ -790,3 +790,31 @@ adjustment take over once the coprocessor is powered.
 
 Goals 1 and 2 remain delivered and verified. Goal 3 is reduced to this single power-management
 issuance gate on the route-fixed kernelcache base.
+
+---
+
+## BREAKTHROUGH: DCP mailbox brought live by our own injected kernel code
+
+We stopped trying to trick Apple's power-management into powering the display coprocessor and
+instead wrote our own kernel routine that does it directly. A code-cave hooked onto the
+RTBuddy start routine's completion loads the coprocessor object from the driver, gates strictly
+to the display coprocessor by its device-tree name (so the storage coprocessor is never
+touched), skips if it is already running, and then calls the low-level run routine to take the
+coprocessor out of reset. All patch bytes were assembled and verified by re-disassembly before
+applying.
+
+Result on boot: for the first time the display coprocessor mailbox shows activity. Our routine
+writes the run bit to the coprocessor control register at the mailbox base, the emulator's
+mailbox model detects the reset-deassert, sends the RTKit HELLO, and the coprocessor mailbox
+interrupt is delivered to the guest and acknowledged. It fires exactly once, only for the
+display coprocessor, with no panic and a healthy boot.
+
+What remains is completing the handshake. The driver takes the interrupt but does not yet drain
+the incoming mailbox to read our HELLO. The likely cause is timing: we force the power-up at the
+end of the start routine, before the driver arms its mailbox receive path (which normally
+happens later in the power-management flow we bypassed), so the HELLO arrives before the
+receiver is listening. Next steps are to delay or repeat the HELLO so the driver has time to arm
+its receive path, or to move the hook to a later once-per-coprocessor site that runs after the
+receive path is set up. This is the first time the emulated coprocessor and the real driver have
+exchanged anything, which is the milestone that unblocks the mailbox and, after it, the display
+pipeline.

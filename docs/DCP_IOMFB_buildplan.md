@@ -896,3 +896,29 @@ physical base, plus confirming the legacy swap path is exercised in this boot.
 
 The coprocessor-mailbox result and goals one and two remain intact. This entry records the honest
 ceiling: kernel-drawn pixels are reachable; the GPU-composited interface is not.
+
+---
+
+## GPU firmware maps to the same coprocessor stack; the real pixel path is forcing the boot console
+
+Two parallel investigations landed.
+
+The GPU. The AGX (G17) firmware coprocessor uses the exact same coprocessor and mailbox stack as
+the display coprocessor. The forced-power-up routine we already proved transfers unchanged except
+for the coprocessor name it gates on. Its device-tree node exists but lacks the compatible string
+that binds the coprocessor driver, and the whole GPU accelerator side of the device tree is
+absent, so bringing the GPU firmware mailbox to life needs a device-tree addition plus a mailbox
+model, and even then it renders nothing without the accelerator, its page tables, the firmware
+image, and ultimately the GPU hardware. It is the same shape as the display-coprocessor work, one
+layer deeper, and it does not produce pixels. Recorded as buildable but lower priority.
+
+The pixels. The only kernel virtual address that validly maps the scanout framebuffer is the one
+the kernel itself creates for it; the physical aperture does not cover the framebuffer (it is
+carved just above usable memory), which a direct test confirmed by faulting. That same
+kernel-created mapping is where the kernel's own text/spinner console would draw. So the pixel
+path is not copying a surface; it is forcing the kernel graphics console on, so the verbose boot
+text and boot spinner paint the scanout directly. This also explains why the framebuffer is
+blank: modern iOS suppresses the linear-framebuffer console in favor of the display coprocessor,
+so nothing paints it. The next step is to find and flip that suppression so the kernel paints its
+own boot output to the screen, which is real, kernel-drawn iOS pixels. Goals one and two and the
+mailbox result remain intact.

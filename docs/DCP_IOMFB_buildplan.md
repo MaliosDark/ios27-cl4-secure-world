@@ -865,3 +865,34 @@ to call, whose methods drive the normal-world mailbox we already model, installe
 driver expects its route. That is a self-contained piece of kernel code we write, and it lets the
 power-up path arm the receiver against our mailbox and complete the handshake. It is bounded work
 and is the real next step. The mailbox-live result and goals 1 and 2 remain intact.
+
+---
+
+## DECISIVE: SpringBoard pixels require a GPU that is not emulated; only kernel-drawn pixels are reachable
+
+The bypass-the-coprocessor investigation settled the pixel question at the architecture level.
+
+The mobile framebuffer is a remote-procedure shim to the display coprocessor: surfaces are handed
+to the coprocessor as device-virtual addresses and are never exposed as a CPU-addressable scanout
+base, so there is nothing to copy on that path. More fundamentally, the iOS 27 user-interface
+compositor requires the GPU. There is no on-device software rasterizer for the interface, so with
+no GPU the SpringBoard surfaces are never drawn: faking a display yields a black screen, and
+copying the interface swap-surfaces has no pixel source. This corrects an earlier assumption,
+carried from an iOS 14 precedent, that iOS software-renders the interface; that does not hold for
+iOS 27.
+
+The only pixels obtainable without a GPU are the kernel-drawn surfaces owned by the legacy
+framebuffer class: the boot spinner, the system console, and the default framebuffer. Those are
+CPU-drawn and can be copied to the scanout framebuffer the emulator already displays.
+
+Bottom line for the display goal: the SpringBoard home screen is blocked by the absence of GPU
+emulation, which is not feasible on this host, so that specific result is out of reach. What is
+reachable and satisfies the "real framebuffer surface, not a synthetic painter" criterion is the
+kernel's own drawn surface. A near-complete injected routine for that exists: hook the legacy
+framebuffer swap entry and copy its surface into the scanout framebuffer via the kernel's
+physical-copy helper. Two values still need a runtime probe to finalize, since the emulator debug
+stub cannot break on kernel code: the copy helper's address and the default-framebuffer surface's
+physical base, plus confirming the legacy swap path is exercised in this boot.
+
+The coprocessor-mailbox result and goals one and two remain intact. This entry records the honest
+ceiling: kernel-drawn pixels are reachable; the GPU-composited interface is not.

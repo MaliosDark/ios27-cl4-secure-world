@@ -818,3 +818,29 @@ its receive path, or to move the hook to a later once-per-coprocessor site that 
 receive path is set up. This is the first time the emulated coprocessor and the real driver have
 exchanged anything, which is the milestone that unblocks the mailbox and, after it, the display
 pipeline.
+
+---
+
+## Mailbox live confirmed; handshake blocked on the driver arming its receive path
+
+Iterating the injected routine established, reliably, both the win and the remaining wall.
+
+The win holds: calling the low-level run routine takes the coprocessor out of reset, our mailbox
+model detects it and sends the RTKit HELLO, and the coprocessor interrupt is delivered to the
+guest.
+
+The wall: after HELLO the driver never reads the mailbox. It takes the interrupt and acknowledges
+it repeatedly but its handler touches no mailbox register at all, which means the interrupt it
+receives is not its mailbox receive handler. The driver arms its mailbox receive path (interrupt
+handler plus endpoint processing) only through the normal power-management power-up run on its
+command gate. Calling the power-on method directly from the driver start tail deadlocks, and even
+ordering our HELLO first so the deadlock clears does not arm the receive path. So forcing the
+hardware reset gives us a live coprocessor from the emulator side, but the driver software is
+never put into the listening state.
+
+Next step, now precisely bounded: trigger the driver's power-up asynchronously so the power-on
+method runs on its own gate and arms the receive path, for example by calling the public
+power-management request method rather than the internal power-on directly. Then the HELLO is
+caught by the now-armed receiver and the handshake proceeds into endpoint discovery and the
+display transport. Goals 1 and 2 remain intact throughout; the minimal mailbox-live result is
+preserved as a reference build.

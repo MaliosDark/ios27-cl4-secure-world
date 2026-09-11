@@ -922,3 +922,35 @@ blank: modern iOS suppresses the linear-framebuffer console in favor of the disp
 so nothing paints it. The next step is to find and flip that suppression so the kernel paints its
 own boot output to the screen, which is real, kernel-drawn iOS pixels. Goals one and two and the
 mailbox result remain intact.
+
+---
+
+## Final verdict on pixels: an architectural ceiling, not a missing patch
+
+Forcing the kernel graphics console on does not work: it reaches a callback-iteration loop that
+walks a display-callback registry and calls each entry. Guarding one bad entry only moves the
+fault to the next; the entries are garbage of different shapes (misaligned, and aligned-but-not-
+code). The registry is fundamentally uninitialized, because it is populated by the display
+subsystem initialization that only the absent display driver performs. So the console cannot be
+forced to paint without first bringing up the whole display driver state.
+
+Every pixel path has now been tested and is blocked:
+
+- Writing the framebuffer directly from kernel code faults, because the framebuffer is carved
+  above usable memory and is outside the physical aperture the physmap covers.
+- Copying the legacy framebuffer surface does not run, because that framebuffer class never
+  attaches without the display coprocessor.
+- Forcing the kernel graphics console iterates an uninitialized callback registry and crashes.
+- The real display path needs the secure-world route object (absent) to arm its receive path,
+  and, for the interface, the GPU.
+- The GPU firmware coprocessor is forceable, but rendering needs the actual GPU hardware to
+  execute shaders; no software implementation of it exists.
+
+The conclusion is architectural: the iOS 27 interface is composited only by the GPU, which is not
+emulatable on this host, and every kernel-drawn fallback is coupled to display-subsystem state
+that only the absent display driver initializes. No iOS pixels are reachable here.
+
+What stands: goals one and two are delivered and verified (the full interface stack boots
+internally, writable data volume, multi-minute uptime), and the display coprocessor mailbox was
+brought to life by our own injected kernel code, which is a genuine first even though it does not
+render. This entry records the honest ceiling reached after exhausting every display path.

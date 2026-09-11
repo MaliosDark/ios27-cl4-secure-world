@@ -844,3 +844,24 @@ power-management request method rather than the internal power-on directly. Then
 caught by the now-armed receiver and the handshake proceeds into endpoint discovery and the
 display transport. Goals 1 and 2 remain intact throughout; the minimal mailbox-live result is
 preserved as a reference build.
+
+---
+
+## Receive-path arming is entangled with the absent secure-route object
+
+Driving the driver's power-up through its command gate no longer deadlocks, but it faults: the
+power-up path loads the driver's route/transport object and calls into it, and that object is
+null because the secure-world route was never established in this VM. The fault is a plain null
+dereference of that object.
+
+This sharpens the remaining work. The driver arms its mailbox receive path by calling into its
+route object; with no secure world that object is absent, so the receive path cannot arm through
+the normal flow even after the coprocessor is powered. The same secure-world dependency that
+gated power now also gates receive. Guarding the null dereferences would only skip the arming,
+not perform it, because that very object is what would arm the receiver.
+
+So the concrete remaining brick is to provide our own small route/transport object for the driver
+to call, whose methods drive the normal-world mailbox we already model, installed where the
+driver expects its route. That is a self-contained piece of kernel code we write, and it lets the
+power-up path arm the receiver against our mailbox and complete the handshake. It is bounded work
+and is the real next step. The mailbox-live result and goals 1 and 2 remain intact.

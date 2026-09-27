@@ -954,3 +954,34 @@ What stands: goals one and two are delivered and verified (the full interface st
 internally, writable data volume, multi-minute uptime), and the display coprocessor mailbox was
 brought to life by our own injected kernel code, which is a genuine first even though it does not
 render. This entry records the honest ceiling reached after exhausting every display path.
+
+---
+
+## A feasible path forward: a paravirtual GPU that renders on the host
+
+We are not closing this. The research confirms nobody has emulated the Apple GPU in software, but
+that is a frontier to build, not a wall, and the plan below routes around the multi-year part.
+
+The reframe: do not emulate the AGX GPU in software. Build a paravirtual GPU that forwards the
+guest's graphics work to the host's GPU, which every Mac has. Apple's own paravirtual graphics
+does exactly this and only requires an Apple-Silicon host because it passes the raw commands
+through; if we translate the commands ourselves, an ordinary host GPU works.
+
+The enabling insight is that the plumbing is host-side and already works: the emulator can write
+the scanout framebuffer (our boot-log painter already does) and can read guest memory (where the
+graphics command buffers live). So the guest never needs to write the framebuffer, and the two
+attempts to make it do so are now retired as dead ends. The emulator does both ends.
+
+Phases: (1) scanout and command-capture plumbing, already working host-side; (2) make the guest
+GPU stack initialize and submit commands, which extends the coprocessor-mailbox breakthrough since
+the GPU firmware uses the identical coprocessor stack as the display one; (3) replay the captured
+commands on the host GPU and write the results to the framebuffer, the large but bounded novel
+brick, intercepting as high as possible so it is a Metal-to-host translation rather than a
+GPU-instruction-set reimplementation; (4) iterate on correctness.
+
+First brick landed: the GPU firmware coprocessor mailbox is now modeled in the emulator, mirroring
+the display one, and verified to map cleanly. Next bricks are giving the GPU coprocessor
+device-tree node its binding string so its firmware driver attaches, then reusing the display
+force-up routine to bring the GPU coprocessor out of reset. Goals one and two and the display
+mailbox result remain intact; this entry replaces the earlier "ceiling" framing with a concrete,
+phased build.

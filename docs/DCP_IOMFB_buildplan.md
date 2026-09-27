@@ -985,3 +985,35 @@ device-tree node its binding string so its firmware driver attaches, then reusin
 force-up routine to bring the GPU coprocessor out of reset. Goals one and two and the display
 mailbox result remain intact; this entry replaces the earlier "ceiling" framing with a concrete,
 phased build.
+
+---
+
+## GPU bricks land; peeling the crash reveals the single shared root cause
+
+Progress on the paravirtual-GPU roadmap this round, all verified: the GPU firmware coprocessor
+mailbox is now modeled in the emulator; the GPU coprocessor device-tree node was given its
+binding string via a surgical, byte-exact splice (the earlier corruption came from a lossy
+re-encoder, avoided here) and the guest boots with it; and the recurring garbage-callback crash
+was guarded by skipping callbacks that fall outside the executable range.
+
+That guard cleared the garbage call, but the fault moved to an unmapped-memory access at the same
+point in the bring-up, right after the firmware service fails to allocate. The lesson is
+decisive: the callbacks being skipped are essential, because they map the coprocessor's shared
+memory; skipping them leaves memory unmapped and the next access faults. So the crash cannot be
+guarded past.
+
+This localizes the single shared root cause behind every coprocessor wall we have hit, the
+display secure route, the receive-path arming, and now the GPU firmware: the firmware-kit and
+exclave infrastructure is never initialized, its service class cannot even allocate, because the
+secure-world initialization that populates its callback and shared-memory tables is absent. The
+known-good boot survives only because it never brings a coprocessor up. Any forced bring-up
+cascades through that uninitialized state.
+
+So the one brick that unblocks the whole coprocessor stack, display and GPU alike, is to
+initialize that firmware-kit and exclave infrastructure: provide the firmware service and the
+secure-world communication the coprocessors expect, so the callback and shared-memory tables are
+populated for real. That is the secure-world frontier that has been the deep wall throughout, now
+pinpointed as a single shared root cause rather than several separate ones. The next step is to
+find why the firmware service fails to allocate and what its essential callbacks map, then build
+the minimal initialization. Goals one and two, the display mailbox result, and the GPU mailbox
+brick all remain intact.

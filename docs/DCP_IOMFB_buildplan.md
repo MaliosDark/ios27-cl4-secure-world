@@ -1017,3 +1017,30 @@ pinpointed as a single shared root cause rather than several separate ones. The 
 find why the firmware service fails to allocate and what its essential callbacks map, then build
 the minimal initialization. Goals one and two, the display mailbox result, and the GPU mailbox
 brick all remain intact.
+
+---
+
+## Bedrock: exclaves are not supported, and that is the single root cause of everything
+
+Drilling the crash all the way down reaches the panic log line that explains the entire effort:
+the secure-world scheduler reports its boot status as not supported. Its boot has three states,
+not supported, partial, and complete, and ours is the first. Because that scheduler never boots,
+the firmware-kit and coprocessor infrastructure that sits on top of it, the inter-process
+transport over the secure scheduler and the callback and shared-memory tables it populates, is
+never initialized.
+
+This unifies every wall we have hit. The display secure route is an endpoint on that scheduler.
+The display receive-path arming reads an object that only exists when it is up. The firmware
+service cannot allocate because its class comes from that world. The garbage callbacks and the
+follow-on unmapped-memory fault are the un-populated callback and shared-memory tables. The GPU
+firmware bring-up cascades the same way. One root cause, not many.
+
+So the highest-leverage brick in the whole project, the one that unblocks the entire coprocessor
+stack at once, storage over a real mailbox, the display, and the GPU, is to bring that secure
+scheduler up at least partially, or to emulate it and its transport so the infrastructure
+initializes without the full secure userspace. The device tree already carries the relevant
+nodes; the machine boots the lower secure monitors but not the scheduler, so support reads as not
+supported. The entry points are the support check that decides not supported, what the scheduler
+needs from the monitor and shared buffers, and the transport runtime to stub. The bricks landed
+this round, the GPU mailbox model, the GPU device-tree binding, and the callback guard, remain
+valid and sit ready above this root. Goals one and two and the display mailbox result are intact.

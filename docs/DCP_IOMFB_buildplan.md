@@ -1044,3 +1044,30 @@ supported. The entry points are the support check that decides not supported, wh
 needs from the monitor and shared buffers, and the transport runtime to stub. The bricks landed
 this round, the GPU mailbox model, the GPU device-tree binding, and the callback guard, remain
 valid and sit ready above this root. Goals one and two and the display mailbox result are intact.
+
+---
+
+## The exclaves gate flips; the remaining wall is precisely the absent secure scheduler
+
+The secure-world boot status is gated by a single flag bit the secure monitor hands the kernel:
+clear means not supported, set means not started (proceed). We baked a two-instruction kernel
+patch that pins it to not started, and the boot now reports not started instead of not supported,
+so the secure-world boot routine proceeds past its early return and runs its transport
+registration and its eight init handlers.
+
+It still stops at the same garbage-callback crash, and the firmware service still cannot allocate.
+That is the expected and useful result: the callback tables that crash are exactly the ones the
+secure scheduler would populate through its downcalls. With no scheduler present, the registration
+cannot fill them, so they stay garbage and dispatching them crashes; and we already showed the
+crash cannot be guarded past, because those callbacks also map the coprocessor shared memory. So
+the crash is, precisely, the absence of the secure scheduler.
+
+This pins the final, unified brick: emulate the secure scheduler and its transport enough to
+service the downcalls the handlers emit once the status is not started, returning success and a
+valid shared-memory handshake so the callback tables are filled for real. That single piece
+unblocks the whole coprocessor stack at once, storage over a real mailbox, the display, and the
+GPU. The next step is to enumerate the exact transport requests the kernel emits so a stub can
+answer them; an alternative to the kernel patch is to set the same flag bit in the secure
+monitor's handoff, which needs no kernel change. The exclaves flip is a real landed brick (the
+status now advances); the scheduler-and-transport stub is the deep but singular target that
+remains. Goals one and two and the mailbox results are intact.
